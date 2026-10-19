@@ -1,8 +1,8 @@
 # Custom Claude Frontend
 
-A local, single-user, Projects-style web app: a coordinator session starts threads that run in parallel, each backed by Claude Code.
+A single-user, Projects-style web app: a coordinator session starts threads that run in parallel, each backed by Claude Code, on this machine or on other machines you add as nodes.
 
-> **Status: milestone M4.** Each project has a project chat with a coordinator that starts threads, which run in parallel up to a concurrency cap and report back when they finish. Every session gets the project's memory file, shows how full its context is and marks compactions, and Subscription work shows its estimated share of your plan. Threads run real Claude Code sessions in either mode, with tool approvals in the UI, stop and resume across restarts.
+> **Status: milestone M6.** Each project has a project chat with a coordinator that starts threads, which run in parallel and report back when they finish. Threads run real Claude Code sessions in either mode, with tool approvals in the UI, memory, a context meter and plan-share estimates. Threads of a git-repo project can run on other machines (nodes), each in its own worktree and branch, and move between nodes when one is drained, stopped or goes offline. The app works from your phone over Tailscale with a password.
 
 ## Runner modes
 
@@ -57,7 +57,7 @@ On first launch, if neither `config.json` nor `CCF_MODE` picks a mode, the UI as
 
 The screen has three panes: projects and their threads on the left, the project chat in the centre, and the open thread on the right.
 
-- A first project (`data/workspaces/default`) is created on first start. **New** in the sidebar adds a project pointing at any folder, which becomes every session's working directory.
+- A first project (`data/workspaces/default`) is created on first start. **New** in the sidebar adds a project, either a **git repo** (threads clone it on whichever node runs them, each on its own branch) or a **folder here** (every session works in that folder on this machine).
 - **The project chat** talks to the coordinator, a Claude Code session whose job is to delegate. Ask for something like "research A, B and C" and it starts one thread per piece of work, each shown as a card with its live status. It answers quick questions itself.
 - **Threads** run in parallel, up to the concurrency cap (default 3, in Settings). Extra threads show **Queued** until a slot frees up; **Cancel** drops a queued thread's input. The coordinator itself never waits for a slot.
 - When a thread the coordinator started finishes a run, the coordinator gets a notice with the thread's outcome and its final message, which threads are told to make a summary of no more than 2,000 characters. If something doesn't fit, the summary tells the coordinator to read the full thread. A summary that runs past 4,000 characters is cut, with a note saying where the rest is. You can also message any thread directly, and **New chat** starts a thread of your own that doesn't report back.
@@ -72,6 +72,37 @@ The screen has three panes: projects and their threads on the left, the project 
 - **Copy terminal resume command** gives `cd <workspace> && claude --resume <session>`, which opens the thread in your own terminal. (The CLI's interactive `/resume` picker doesn't list sessions started this way; resuming by id works.)
 - Plan usage is the account-wide figure the CLI reports on each Subscription run (an undocumented signal), so usage from claude.ai or other clients counts too.
 
+## Nodes: threads on other machines
+
+Every thread runs on a node. This machine is the first one, so a single-machine setup needs nothing more. Add other Linux machines, such as Raspberry Pis, and threads of git-repo projects run there while this machine (the orchestrator) keeps every thread's history. Your laptop and phone are only screens: work carries on while they're closed.
+
+**What runs where.** Project chats and local-folder projects always run on this machine. A repo project's thread runs on any enabled node with room, preferring one that already has the repo cloned, and stays on that node between runs. Each thread gets its own git worktree on branch `thread/<first 8 characters of its id>`, so parallel threads never edit the same files. After every turn the node pushes the branch if the turn made commits, and uploads the session's transcript to this machine.
+
+**Credentials.** Under **Settings › Credentials**, save a Claude token for Subscription mode (run `claude setup-token` on a machine signed in to your plan), an API key for API mode if you use it, and a fine-grained GitHub token with read and write access to your repos' contents. They're encrypted on this machine (the key is `data/secret.key`), never shown again, and sent to a node only with the run that needs it, as environment variables. Nodes never write them to disk. This machine keeps using its own `claude` login. A node with no Claude token can still run Subscription threads if its own `claude` is signed in.
+
+**Adding a node.** You need Tailscale on both machines (or another private network, see `allowedNetworks`), and remote access turned on here:
+
+1. In `config.json`, set `"remoteAccess": true` and `"publicUrl": "http://<this machine's Tailscale name>:4317"`, then restart. Set a password under **Settings › Remote access**.
+2. Open **Nodes › Add node** and copy the command. It holds a pairing code that works once, for 15 minutes.
+3. Run it on the new machine. It installs git and Node.js 22 with apt if they're missing, downloads the worker to `~/.ccf-node`, installs the Agent SDK (which brings Claude Code for that machine's platform), pairs, and starts the worker as a systemd user service that starts at boot. The node shows up in the Nodes view.
+
+The node runs Claude Code from its own `claude` if one is on its `PATH`, otherwise the copy that came with the Agent SDK. Install whatever build tools your projects need on it yourself.
+
+**The Nodes view** shows each node's state, CPU, memory and disk, whether each mode can run there and why not, its thread limit (default 2) and the threads on it. Each thread's header says which node it's on.
+
+| State | Takes new threads | How it gets there |
+| --- | --- | --- |
+| Enabled | Yes, up to its limit | Paired, or **Enable** |
+| Draining | No | **Drain**: running turns finish, then each thread hands off |
+| Disabled | No | A drain finished, or **Stop now** |
+| Offline | No | No heartbeat for 30 seconds |
+
+**Handoff.** When a thread leaves a node (Drain, or Stop now, which interrupts the turn first), the node commits anything uncommitted as a `WIP: handing off from <node>` commit, pushes the branch, uploads the transcript and removes the worktree. The thread's next run starts on another node, which checks out the branch, restores the transcript and resumes the same session; the thread shows "Moved from A to B" and Claude is told why. A stopped turn continues by itself. If a node disappears, its running threads resume elsewhere at once from their last finished turn and last pushed commit, and Claude is told that unpushed work on the old node may be lost and is given the cut-off request again. Idle threads on an offline node wait 30 seconds for it to come back before moving.
+
+**Remove** revokes a node's token. An online node with threads on it has to be drained first.
+
+**Remote access.** With `remoteAccess` on, the server listens on every interface but only answers this machine, Tailscale addresses (100.64.0.0/10 and fd7a:115c:a1e0::/48) and any `allowedNetworks`. Other devices log in with the password and stay logged in for 30 days; changing the password signs them out. This machine never needs to log in. Nodes and Claude sessions use their own tokens. Because this machine holds your Claude and GitHub tokens, it's the one to protect.
+
 ## Troubleshooting
 
 - **The badge says "Not ready".** Hover it for the reason. In Subscription mode it's usually that `claude` isn't found, is older than 2.0.0, or isn't signed in (`claude auth login`). In API mode it's a missing `ANTHROPIC_API_KEY` in the server's environment; restart the server after setting it.
@@ -81,6 +112,11 @@ The screen has three panes: projects and their threads on the left, the project 
 - **A thread stopped after many steps.** Runs end after `maxTurns` agent turns (default 50). Send another message to continue.
 - **The API spend turned red.** Estimated API spend passed `spendWarnUsd` (default $10). It's a warning only; nothing is stopped.
 - **Port 4317 is taken.** Set `port` in `config.json` or `CCF_PORT`.
+- **The Add node command says it only works on this machine.** You opened the app as `localhost`. Set `publicUrl` in `config.json` (or open the app by its Tailscale name) so the command points somewhere other machines can reach.
+- **A node shows Offline.** Check the worker on it: `systemctl --user status ccf-node` and `journalctl --user -u ccf-node -f`. It reconnects on its own when the orchestrator is reachable again. If it says the orchestrator refused it, the node was removed: pair it again.
+- **A node can't run Subscription threads.** Save a Claude token under Settings › Credentials, or sign in to `claude` on the node.
+- **A thread's push failed.** The thread shows the git error. Usually the GitHub token is missing, expired, or lacks contents write access to that repo.
+- **Another device gets "Set a password on the orchestrator machine first".** Set one under Settings › Remote access on this machine.
 - **Starting over.** Stop the server and delete `data/` (the database and the default workspace). Your Claude sessions stay in `~/.claude`.
 
 ## Configuration
@@ -90,13 +126,17 @@ Copy `config.example.json` to `config.json` (it's git-ignored). Every field is o
 | Field | Env override | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `CCF_MODE` | none | Default runner mode, `api` or `subscription`. With neither set, the UI asks on first launch. |
-| `port` | `CCF_PORT` | `4317` | Server port (always bound to 127.0.0.1). |
+| `port` | `CCF_PORT` | `4317` | Server port (bound to 127.0.0.1 unless `remoteAccess` is on). |
 | `dataDir` | `CCF_DATA_DIR` | `./data` | Where the SQLite database lives. |
 | `claudePath` | `CCF_CLAUDE_PATH` | `claude` | The `claude` CLI used in Subscription mode. |
 | `concurrency` | | `3` | Default cap on threads running at once (the coordinator doesn't count). |
 | `workspacesDir` | | `<dataDir>/workspaces` | Where the default project's workspace is created. |
 | `maxTurns` | | `50` | Cap on agent turns per run, so a runaway session stops on its own. |
 | `spendWarnUsd` | | `10` | Estimated API-mode spend at which the badge turns red; `0` turns the warning off. |
+| `remoteAccess` | `CCF_REMOTE_ACCESS=1` | `false` | Listen on every interface for other devices and nodes, with a password (see Nodes). |
+| `publicUrl` | `CCF_PUBLIC_URL` | none | This server's URL as other machines reach it, used in the Add node command. |
+| `allowedNetworks` | | `[]` | Extra networks to accept besides Tailscale, in CIDR form, e.g. `["192.168.1.0/24"]`. |
+| `localThreadLimit` | | `concurrency` | How many threads this machine runs at once as a node (the Nodes view can change it). |
 
 A mode chosen in the UI or through the API is saved in the database and wins over the configured default.
 
@@ -121,7 +161,7 @@ Threads:
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET` / `POST /api/projects` | List or create projects (`{ "name", "workspacePath" }`) |
+| `GET` / `POST /api/projects` | List or create projects (`{ "name", "workspacePath" }` or `{ "name", "repoUrl", "baseBranch"? }`) |
 | `GET` / `POST /api/projects/:id/threads` | List or create threads |
 | `GET /api/threads/:id` | Thread, messages, runs, pending approvals and the resume command |
 | `POST /api/threads/:id/messages` | Send `{ "text" }`; `409 mode_changed` asks you to resend with `"continueInMode"` |
@@ -131,8 +171,14 @@ Threads:
 | `POST /api/projects/:id/coordinator/reset` | Start a fresh coordinator session on the next message |
 | `POST /api/approvals/:id` | Answer `{ "behavior": "allow" \| "deny", "always"?: true }` |
 | `GET /api/runs/:id/events` | Normalized events of one run |
+| `GET /api/nodes` | Every node with its state, resources, readiness per mode and threads |
+| `PATCH /api/nodes/:id` | `{ "action": "enable" \| "drain" \| "stop" }`, `{ "threadLimit": n }` or `{ "name" }` |
+| `DELETE /api/nodes/:id` | Remove a node and revoke its token |
+| `POST /api/nodes/pairing` | A one-time pairing code and the install command |
+| `GET /api/secrets`, `PUT /api/secrets/:name` | Which credentials are set; save one with `{ "value" }` (empty removes it). Values are never returned |
+| `GET /api/auth/status`, `POST /api/auth/login`, `POST /api/auth/logout`, `PUT /api/auth/password` | Remote access login |
 
-Live updates (runtime, threads, messages, approvals) stream over the WebSocket at `/api/events`.
+Live updates (runtime, threads, messages, approvals, nodes) stream over the WebSocket at `/api/events`. Nodes connect to `/api/nodes/connect`, pair through `/api/nodes/pair` and download the worker from `/api/nodes/install.sh` and `/api/nodes/worker/*`.
 
 ### The app's MCP server
 
@@ -151,7 +197,8 @@ The coordinator can't use Claude Code's own subagents (`Task`), so delegated wor
 ## Layout
 
 - `shared/`: TypeScript types shared by server and UI.
-- `server/`: Fastify, `node:sqlite`, the `SessionRunner` interface with one SDK runner and two launch profiles, the thread service and scheduler, the app's MCP server, approvals, the role prompts and the SessionStart hook (`server/hooks/post-hook.mjs`) that reports each session's id.
+- `server/`: Fastify, `node:sqlite`, the `SessionRunner` interface with one SDK runner and two launch profiles, the thread service and scheduler, the app's MCP server, approvals, the role prompts and the SessionStart hook (`server/hooks/post-hook.mjs`) that reports each session's id. `server/src/nodes/` is the node protocol: the agent that runs threads (in-process for this machine, in the worker elsewhere), the hub that talks to nodes, git worktrees and transcripts. `server/assets/install.sh` is the node install script.
+- `node/`: the node worker, bundled into one file (`node/dist/worker.mjs`) that nodes download.
 - `web/`: React and Vite.
 
 `pnpm test`, `pnpm typecheck` and `pnpm build` run across all packages.
