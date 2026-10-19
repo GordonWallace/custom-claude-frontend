@@ -2,6 +2,7 @@ import type { ThreadStatus } from '@ccf/shared';
 
 const LABEL: Record<ThreadStatus, string> = {
   idle: 'Idle',
+  queued: 'Queued',
   running: 'Running',
   awaiting_permission: 'Waiting on you',
   interrupted: 'Stopped',
