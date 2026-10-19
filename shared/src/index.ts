@@ -69,6 +69,13 @@ export interface Project {
   id: string;
   name: string;
   workspacePath: string;
+  /**
+   * A git repo URL (M5). Threads of a repo project run on any node, each in its own worktree on
+   * branch thread/<short id>; without one, threads run in workspacePath on the orchestrator's machine.
+   */
+  repoUrl: string | null;
+  /** Branch new threads start from; the remote's default branch when null. */
+  baseBranch: string | null;
   /** The thread that backs the project chat. */
   coordinatorThreadId: string;
   createdAt: string;
@@ -91,6 +98,10 @@ export interface Thread {
   contextWindow: number | null;
   /** Context size at which Claude Code compacts automatically, when it reports one. */
   autoCompactAt: number | null;
+  /** The node the thread runs on (M5). Threads stay on their node between runs until it is drained, stopped or lost. */
+  nodeId: string | null;
+  /** Where the thread's session works on its node, for the terminal resume command. */
+  worktreePath: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -108,7 +119,11 @@ export type MessageKind =
   /** Project chat: a thread's run ended and the coordinator was told (meta.threadId, meta.outcome). */
   | 'thread_notice'
   /** Project chat: the user retired the coordinator's session; the next message starts a fresh one. */
-  | 'session_reset';
+  | 'session_reset'
+  /** The thread's run started on a different node than its last one (meta.from, meta.to). */
+  | 'node_moved'
+  /** A node pushed the thread's branch (meta.branch, meta.commit, meta.wip). */
+  | 'git_push';
 
 export interface Message {
   id: number;
@@ -161,6 +176,8 @@ export interface ThreadDetail {
   approvals: PendingApproval[];
   /** Command that opens this thread's session in the user's own terminal. */
   resumeCommand: string | null;
+  /** The node the thread last ran on, when it is not this machine: the resume command works there. */
+  resumeNode: string | null;
 }
 
 export interface PostMessageBody {
@@ -206,4 +223,82 @@ export type ServerEvent =
   | { type: 'thread'; thread: Thread }
   | { type: 'message'; message: Message }
   | { type: 'approval_requested'; approval: PendingApproval }
-  | { type: 'approval_resolved'; id: string; threadId: string; behavior: 'allow' | 'deny' };
+  | { type: 'approval_resolved'; id: string; threadId: string; behavior: 'allow' | 'deny' }
+  | { type: 'nodes'; nodes: NodeView[] };
+
+// ---- Nodes and remote access (M5, M6) ----
+
+export interface NodeResources {
+  cpus: number;
+  load1: number;
+  memTotal: number;
+  memFree: number;
+  diskTotal: number;
+  diskFree: number;
+}
+
+/**
+ * What the user set: enabled nodes take new threads up to their limit; draining nodes finish their
+ * current turns and hand their threads off; disabled nodes take nothing. Offline is shown on top.
+ */
+export type NodeState = 'enabled' | 'draining' | 'disabled';
+
+export interface NodeView {
+  id: string;
+  name: string;
+  /** The orchestrator's own machine, which always runs the coordinator and local-folder projects. */
+  local: boolean;
+  state: NodeState;
+  online: boolean;
+  threadLimit: number;
+  lastSeenAt: string | null;
+  resources: NodeResources | null;
+  info: {
+    hostname: string;
+    platform: string;
+    arch: string;
+    nodeVersion: string;
+    claudeVersion: string | null;
+    claudeLoggedIn: boolean;
+  } | null;
+  /** Whether each mode can run here now, and why not. */
+  ready: Record<RunnerMode, { ok: boolean; reason?: string }>;
+  threads: { id: string; projectId: string; title: string; status: ThreadStatus; running: boolean }[];
+  createdAt: string;
+}
+
+export interface NodeUpdate {
+  /** enable: take threads again. drain: finish current turns, then hand threads off. stop: interrupt now and hand off. */
+  action?: 'enable' | 'drain' | 'stop';
+  threadLimit?: number;
+  name?: string;
+}
+
+export interface PairingCode {
+  code: string;
+  expiresAt: string;
+  /** Run on the new machine. */
+  command: string;
+  /** The orchestrator URL in the command; nodes must be able to reach it. */
+  url: string;
+  /** Set when the URL is a loopback address no other machine can reach. */
+  warning?: string;
+}
+
+export type SecretName = 'claude_oauth_token' | 'anthropic_api_key' | 'github_token';
+
+/** Credentials are write-only through the API: only whether one is set comes back. */
+export interface SecretStatus {
+  name: SecretName;
+  set: boolean;
+  updatedAt: string | null;
+}
+
+export interface AuthStatus {
+  /** The server listens beyond localhost (remoteAccess in config). */
+  remoteAccess: boolean;
+  passwordSet: boolean;
+  /** This request came from the orchestrator machine itself, which never needs to log in. */
+  loopback: boolean;
+  authenticated: boolean;
+}

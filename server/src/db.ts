@@ -77,6 +77,36 @@ const migrations: string[] = [
      seven_day          REAL,
      seven_day_resets   TEXT
    );`,
+  `ALTER TABLE projects ADD COLUMN repo_url TEXT;
+   ALTER TABLE projects ADD COLUMN base_branch TEXT;
+   ALTER TABLE threads ADD COLUMN node_id TEXT;
+   ALTER TABLE threads ADD COLUMN worktree_path TEXT;
+   ALTER TABLE threads ADD COLUMN handoff_from TEXT;
+   ALTER TABLE threads ADD COLUMN handoff_note TEXT;
+   CREATE TABLE nodes (
+     id             TEXT PRIMARY KEY,
+     name           TEXT NOT NULL,
+     is_local       INTEGER NOT NULL DEFAULT 0,
+     token_hash     TEXT,
+     state          TEXT NOT NULL DEFAULT 'enabled',
+     thread_limit   INTEGER NOT NULL DEFAULT 2,
+     last_seen_at   TEXT,
+     resources_json TEXT,
+     info_json      TEXT,
+     created_at     TEXT NOT NULL
+   );
+   CREATE TABLE secrets (
+     name       TEXT PRIMARY KEY,
+     iv         TEXT NOT NULL,
+     tag        TEXT NOT NULL,
+     ciphertext TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   );
+   CREATE TABLE auth_sessions (
+     token_hash TEXT PRIMARY KEY,
+     created_at TEXT NOT NULL,
+     expires_at TEXT NOT NULL
+   );`,
 ];
 
 /** Opens the SQLite file (or ':memory:') and applies any migrations it hasn't seen. */

@@ -43,7 +43,7 @@ export abstract class SdkRunner implements SessionRunner {
       resume,
       pathToClaudeCodeExecutable: executablePath,
       // CLAUDE_CODE_ENTRYPOINT=cli makes the transcript look like a plain `claude -p` session rather than an SDK one.
-      env: { ...env, CLAUDE_CODE_ENTRYPOINT: 'cli' },
+      env: { ...env, ...cfg.env, CLAUDE_CODE_ENTRYPOINT: 'cli' },
       permissionMode: cfg.permissionMode,
       allowedTools: cfg.allowedTools,
       disallowedTools: cfg.disallowedTools,
@@ -129,9 +129,16 @@ async function contextUsage(q: ReturnType<QueryFn>): Promise<RunEvent | undefine
   }
 }
 
+let hookScript = fileURLToPath(new URL('../../hooks/post-hook.mjs', import.meta.url));
+
+/** The node worker ships the hook script next to itself rather than in this repo's layout. */
+export function setHookScript(file: string): void {
+  hookScript = file;
+}
+
 /** Settings carrying a SessionStart command hook that POSTs the hook's JSON (with session_id) to the app. */
 export function sessionHookSettings(url: string) {
-  const script = fileURLToPath(new URL('../../hooks/post-hook.mjs', import.meta.url));
+  const script = hookScript;
   return {
     hooks: {
       SessionStart: [

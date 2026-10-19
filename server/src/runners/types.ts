@@ -37,6 +37,8 @@ export interface RunConfig {
   onPermission: (request: PermissionRequest) => Promise<PermissionDecision>;
   /** URL a SessionStart hook POSTs its JSON to, so the app learns the real session id on start, resume and compaction. */
   sessionHookUrl?: string;
+  /** Extra environment for this run only, such as credentials a node gets from the orchestrator. */
+  env?: Record<string, string>;
 }
 
 export type RunEvent =

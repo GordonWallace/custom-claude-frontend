@@ -1,6 +1,12 @@
 import type {
   ApprovalDecision,
+  AuthStatus,
   Message,
+  NodeUpdate,
+  NodeView,
+  PairingCode,
+  SecretName,
+  SecretStatus,
   PostMessageBody,
   Project,
   ProjectUsage,
@@ -27,9 +33,20 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const json = await res.json();
+  const json = res.status === 204 ? {} : await res.json();
+  if (res.status === 401 && (json as { error?: string }).error === 'login_required') onLoginRequired();
   if (!res.ok) throw new ApiError(res.status, json as RuntimeError & Record<string, unknown>);
   return json as T;
+}
+
+/** Another device's session expired or was signed out: the app shows the login screen. */
+const loginListeners = new Set<() => void>();
+function onLoginRequired() {
+  loginListeners.forEach((l) => l());
+}
+export function subscribeLoginRequired(listener: () => void): () => void {
+  loginListeners.add(listener);
+  return () => loginListeners.delete(listener);
 }
 
 export const getRuntime = (refresh = false) =>
@@ -38,8 +55,8 @@ export const getRuntime = (refresh = false) =>
 export const putRuntime = (update: RuntimeUpdate) => request<RuntimeState>('PUT', '/api/runtime', update);
 
 export const listProjects = () => request<Project[]>('GET', '/api/projects');
-export const createProject = (name: string, workspacePath: string) =>
-  request<Project>('POST', '/api/projects', { name, workspacePath });
+export const createProject = (body: { name: string; workspacePath?: string; repoUrl?: string; baseBranch?: string }) =>
+  request<Project>('POST', '/api/projects', body);
 export const listThreads = (projectId: string) => request<Thread[]>('GET', `/api/projects/${projectId}/threads`);
 export const createThread = (projectId: string) => request<Thread>('POST', `/api/projects/${projectId}/threads`, {});
 export const getThread = (id: string) => request<ThreadDetail>('GET', `/api/threads/${id}`);
@@ -53,6 +70,19 @@ export const getUsage = (projectId: string) => request<ProjectUsage>('GET', `/ap
 export const resetCoordinator = (projectId: string) => request<Thread>('POST', `/api/projects/${projectId}/coordinator/reset`);
 export const decideApproval = (id: string, decision: ApprovalDecision) =>
   request<{ ok: true }>('POST', `/api/approvals/${id}`, decision);
+
+export const listNodes = () => request<NodeView[]>('GET', '/api/nodes');
+export const updateNode = (id: string, update: NodeUpdate) => request<NodeView>('PATCH', `/api/nodes/${id}`, update);
+export const removeNode = (id: string) => request<object>('DELETE', `/api/nodes/${id}`);
+export const createPairing = () => request<PairingCode>('POST', '/api/nodes/pairing');
+
+export const listSecrets = () => request<SecretStatus[]>('GET', '/api/secrets');
+export const putSecret = (name: SecretName, value: string) => request<SecretStatus[]>('PUT', `/api/secrets/${name}`, { value });
+
+export const getAuth = () => request<AuthStatus>('GET', '/api/auth/status');
+export const login = (password: string) => request<AuthStatus>('POST', '/api/auth/login', { password });
+export const logout = () => request<{ ok: true }>('POST', '/api/auth/logout');
+export const setPassword = (password: string) => request<{ ok: true }>('PUT', '/api/auth/password', { password });
 
 export const MODE_LABEL: Record<RunnerMode, string> = {
   subscription: 'Subscription: your Claude plan',

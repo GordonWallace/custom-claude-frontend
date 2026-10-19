@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { Project, ProjectUsage, Thread } from '@ccf/shared';
-import { getUsage, listProjects, listThreads } from './api';
+import type { NodeView, Project, ProjectUsage, Thread } from '@ccf/shared';
+import { getUsage, listNodes, listProjects, listThreads } from './api';
 import { useConnection, useServerEvents } from './live';
 
 /** All projects, refetched after a reconnect. */
@@ -51,4 +51,17 @@ export function useProjectUsage(projectId: string | undefined): ProjectUsage | n
   });
 
   return usage;
+}
+
+/** Every node with its state, resources and threads, kept live from node events. */
+export function useNodes(): NodeView[] {
+  const [nodes, setNodes] = useState<NodeView[]>([]);
+  const { epoch } = useConnection();
+  useEffect(() => {
+    void listNodes().then(setNodes, () => undefined);
+  }, [epoch]);
+  useServerEvents((event) => {
+    if (event.type === 'nodes') setNodes(event.nodes);
+  });
+  return nodes;
 }

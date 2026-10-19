@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Message, ModeChangedError, ProjectUsage, RunnerMode, Thread, ThreadDetail } from '@ccf/shared';
+import type { Message, ModeChangedError, NodeView, ProjectUsage, RunnerMode, Thread, ThreadDetail } from '@ccf/shared';
 import { ApiError, BILLING_CONSEQUENCE, MODE_LABEL, getThread, interruptThread, postMessage, resetCoordinator } from '../api';
 import { ContextMeter } from './ContextMeter';
 import { Markdown } from './Markdown';
@@ -20,10 +20,12 @@ interface Props {
   onClose?: () => void;
   /** Estimated plan usage for the project's threads. */
   usage?: ProjectUsage | null;
+  /** Nodes, to name the one the thread runs on. */
+  nodes?: NodeView[];
 }
 
 /** A conversation: the project chat (the coordinator) in the centre pane, or one thread in the right pane. */
-export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onClose, usage }: Props) {
+export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onClose, usage, nodes }: Props) {
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
   const [dialog, setDialog] = useState<'memory' | 'reset'>();
   const { epoch } = useConnection();
@@ -53,12 +55,13 @@ export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onCl
     });
   });
 
-  // Refresh the resume command once the session id arrives.
+  // Refresh the resume command once the session id arrives, or the thread lands in a new working directory.
   const sessionId = detail?.thread.claudeSessionId;
+  const worktree = detail?.thread.worktreePath;
   useEffect(() => {
-    if (sessionId && detail && !detail.resumeCommand) void getThread(threadId).then(setDetail);
+    if (sessionId && detail) void getThread(threadId).then(setDetail);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, worktree]);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' });
@@ -101,7 +104,12 @@ export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onCl
             calibration={usage?.calibration.sevenDay}
             scope={isChat ? 'project' : 'thread'}
           />
-          {detail.resumeCommand && <ResumeCommand command={detail.resumeCommand} />}
+          {!isChat && thread.nodeId && (
+            <span className="node-chip" title="The node this thread runs on" data-testid="thread-node">
+              On {nodes?.find((n) => n.id === thread.nodeId)?.name ?? 'a node'}
+            </span>
+          )}
+          {detail.resumeCommand && <ResumeCommand command={detail.resumeCommand} node={detail.resumeNode} />}
         </div>
       </header>
 
@@ -112,7 +120,7 @@ export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onCl
             in parallel and report back.
           </p>
         )}
-        <Timeline messages={detail.messages} threads={threads} openThreadId={openThreadId} onOpenThread={onOpenThread} />
+        <Timeline messages={detail.messages} threads={threads} openThreadId={openThreadId} onOpenThread={onOpenThread} nodes={nodes} />
         {detail.approvals.map((a) => (
           <ApprovalCard key={a.id} approval={a} />
         ))}
@@ -132,9 +140,10 @@ interface TimelineProps {
   threads: Thread[];
   openThreadId?: string;
   onOpenThread?: (threadId: string) => void;
+  nodes?: NodeView[];
 }
 
-function Timeline({ messages, threads, openThreadId, onOpenThread }: TimelineProps) {
+function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: TimelineProps) {
   const results = useMemo(() => {
     const map = new Map<string, Message>();
     for (const m of messages) if (m.kind === 'tool_result') map.set(String(m.meta?.toolUseId), m);
@@ -175,6 +184,10 @@ function Timeline({ messages, threads, openThreadId, onOpenThread }: TimelinePro
                 <span>
                   Run · {MODE_LABEL[mode]}
                   {m.meta?.resumed ? ' · resumed session' : ''}
+                  {(() => {
+                    const node = nodes?.find((n) => n.id === m.meta?.nodeId);
+                    return node && !node.local ? ` · on ${node.name}` : '';
+                  })()}
                 </span>
               </div>
             );
@@ -218,6 +231,18 @@ function Timeline({ messages, threads, openThreadId, onOpenThread }: TimelinePro
           case 'compacted':
             return (
               <div key={m.id} className="run-divider run-divider-compacted" data-testid="compacted">
+                <span>{m.text}</span>
+              </div>
+            );
+          case 'node_moved':
+            return (
+              <div key={m.id} className="run-divider run-divider-moved" data-testid="node-moved">
+                <span>{m.text}</span>
+              </div>
+            );
+          case 'git_push':
+            return (
+              <div key={m.id} className="run-divider run-divider-push">
                 <span>{m.text}</span>
               </div>
             );
@@ -375,13 +400,13 @@ function ResetDialog({ projectId, onClose }: { projectId: string; onClose: () =>
   );
 }
 
-function ResumeCommand({ command }: { command: string }) {
+function ResumeCommand({ command, node }: { command: string; node: string | null }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
       className="link small"
-      title={command}
+      title={node ? `Run on ${node}: ${command}` : command}
       onClick={() => {
         void navigator.clipboard?.writeText(command).then(() => {
           setCopied(true);
@@ -389,7 +414,7 @@ function ResumeCommand({ command }: { command: string }) {
         });
       }}
     >
-      {copied ? 'Copied' : 'Copy terminal resume command'}
+      {copied ? 'Copied' : node ? `Copy resume command (on ${node})` : 'Copy terminal resume command'}
     </button>
   );
 }

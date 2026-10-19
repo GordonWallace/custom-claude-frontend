@@ -77,6 +77,11 @@ export class RuntimeService {
     return health;
   }
 
+  /** The last health check of a mode, without checking again. */
+  cachedHealth(mode: RunnerMode): RunnerHealth | undefined {
+    return this.healthCache.get(mode);
+  }
+
   async state(refresh = false): Promise<RuntimeState> {
     const [api, subscription] = await Promise.all([this.health('api', refresh), this.health('subscription', refresh)]);
     const mode = this.mode;

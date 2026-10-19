@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Message, MessageKind, Project, Run, RunnerMode, Thread, ThreadStatus, UsageWindow } from '@ccf/shared';
+import type { Message, MessageKind, NodeState, Project, Run, RunnerMode, Thread, ThreadStatus, UsageWindow } from '@ccf/shared';
 import type { Db } from './db.js';
 import type { PlanReading, RunWeight } from './planUsage.js';
 
@@ -15,6 +15,10 @@ interface ThreadRow {
   context_tokens: number | null;
   context_window: number | null;
   auto_compact_at: number | null;
+  node_id: string | null;
+  worktree_path: string | null;
+  handoff_from: string | null;
+  handoff_note: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,6 +60,8 @@ const toThread = (r: ThreadRow): Thread => ({
   contextTokens: r.context_tokens,
   contextWindow: r.context_window,
   autoCompactAt: r.auto_compact_at,
+  nodeId: r.node_id,
+  worktreePath: r.worktree_path,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -88,11 +94,16 @@ export class Store {
   constructor(private readonly db: Db) {}
 
   /** Inserts the project and the coordinator thread that backs its project chat. */
-  createProject(name: string, workspacePath: string, coordinatorTitle: string): Project {
+  createProject(
+    name: string,
+    workspacePath: string,
+    coordinatorTitle: string,
+    repo: { repoUrl: string | null; baseBranch: string | null } = { repoUrl: null, baseBranch: null },
+  ): Project {
     const id = randomUUID();
     this.db
-      .prepare('INSERT INTO projects (id, name, workspace_path, created_at) VALUES (?, ?, ?, ?)')
-      .run(id, name, workspacePath, now());
+      .prepare('INSERT INTO projects (id, name, workspace_path, repo_url, base_branch, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, name, workspacePath, repo.repoUrl, repo.baseBranch, now());
     this.createThread(id, 'coordinator', coordinatorTitle);
     return this.getProject(id)!;
   }
@@ -108,6 +119,8 @@ export class Store {
         id: string;
         name: string;
         workspace_path: string;
+        repo_url: string | null;
+        base_branch: string | null;
         coordinator_thread_id: string | null;
         created_at: string;
       }[]
@@ -115,6 +128,8 @@ export class Store {
       id: r.id,
       name: r.name,
       workspacePath: r.workspace_path,
+      repoUrl: r.repo_url,
+      baseBranch: r.base_branch,
       coordinatorThreadId: r.coordinator_thread_id ?? '',
       createdAt: r.created_at,
     }));
@@ -168,7 +183,10 @@ export class Store {
   updateThread(
     id: string,
     patch: Partial<
-      Pick<Thread, 'status' | 'claudeSessionId' | 'lastMode' | 'contextTokens' | 'contextWindow' | 'autoCompactAt' | 'title'>
+      Pick<
+        Thread,
+        'status' | 'claudeSessionId' | 'lastMode' | 'contextTokens' | 'contextWindow' | 'autoCompactAt' | 'title' | 'nodeId' | 'worktreePath'
+      > & { handoffFrom: string | null; handoffNote: string | null }
     >,
   ): Thread {
     const columns: Record<string, string> = {
@@ -179,6 +197,10 @@ export class Store {
       contextWindow: 'context_window',
       autoCompactAt: 'auto_compact_at',
       title: 'title',
+      nodeId: 'node_id',
+      worktreePath: 'worktree_path',
+      handoffFrom: 'handoff_from',
+      handoffNote: 'handoff_note',
     };
     // undefined leaves a column alone; null clears it.
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
@@ -187,6 +209,20 @@ export class Store {
       .prepare(`UPDATE threads SET ${[...sets, 'updated_at = ?'].join(', ')} WHERE id = ?`)
       .run(...(entries.map(([, v]) => v) as (string | number | null)[]), now(), id);
     return this.getThread(id)!;
+  }
+
+  /** Where a thread was handed off from, and what its next run should be told, until a run starts elsewhere. */
+  handoffOf(threadId: string): { from: string | null; note: string | null } {
+    const row = this.db.prepare('SELECT handoff_from, handoff_note FROM threads WHERE id = ?').get(threadId) as
+      | { handoff_from: string | null; handoff_note: string | null }
+      | undefined;
+    return { from: row?.handoff_from ?? null, note: row?.handoff_note ?? null };
+  }
+
+  threadsOnNode(nodeId: string): Thread[] {
+    return (this.db.prepare('SELECT * FROM threads WHERE node_id = ? ORDER BY created_at').all(nodeId) as unknown as ThreadRow[]).map(
+      toThread,
+    );
   }
 
   addMessage(m: Omit<Message, 'id' | 'createdAt'>): Message {
@@ -347,4 +383,104 @@ export class Store {
       .get() as { total: number };
     return row.total;
   }
+
+  // ---- Nodes (M5) ----
+
+  listNodes(): NodeRow[] {
+    return this.db.prepare('SELECT * FROM nodes ORDER BY is_local DESC, created_at').all() as unknown as NodeRow[];
+  }
+
+  getNode(id: string): NodeRow | undefined {
+    return this.db.prepare('SELECT * FROM nodes WHERE id = ?').get(id) as unknown as NodeRow | undefined;
+  }
+
+  nodeByTokenHash(hash: string): NodeRow | undefined {
+    return this.db.prepare('SELECT * FROM nodes WHERE token_hash = ?').get(hash) as unknown as NodeRow | undefined;
+  }
+
+  createNode(n: { name: string; local: boolean; tokenHash: string | null; threadLimit: number }): NodeRow {
+    const id = randomUUID();
+    this.db
+      .prepare('INSERT INTO nodes (id, name, is_local, token_hash, thread_limit, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, n.name, n.local ? 1 : 0, n.tokenHash, n.threadLimit, now());
+    return this.getNode(id)!;
+  }
+
+  updateNode(
+    id: string,
+    patch: Partial<{ name: string; state: string; thread_limit: number; last_seen_at: string; resources_json: string; info_json: string }>,
+  ): void {
+    const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) return;
+    this.db
+      .prepare(`UPDATE nodes SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`)
+      .run(...(entries.map(([, v]) => v) as (string | number)[]), id);
+  }
+
+  deleteNode(id: string): void {
+    this.db.prepare('UPDATE threads SET node_id = NULL WHERE node_id = ?').run(id);
+    this.db.prepare('DELETE FROM nodes WHERE id = ?').run(id);
+  }
+
+  // ---- Secrets (M5): ciphertext only; see secrets.ts ----
+
+  getSecretRow(name: string): SecretRow | undefined {
+    return this.db.prepare('SELECT * FROM secrets WHERE name = ?').get(name) as unknown as SecretRow | undefined;
+  }
+
+  listSecretRows(): SecretRow[] {
+    return this.db.prepare('SELECT * FROM secrets').all() as unknown as SecretRow[];
+  }
+
+  putSecretRow(row: Omit<SecretRow, 'updated_at'>): void {
+    this.db
+      .prepare(
+        `INSERT INTO secrets (name, iv, tag, ciphertext, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET iv = excluded.iv, tag = excluded.tag, ciphertext = excluded.ciphertext, updated_at = excluded.updated_at`,
+      )
+      .run(row.name, row.iv, row.tag, row.ciphertext, now());
+  }
+
+  deleteSecretRow(name: string): void {
+    this.db.prepare('DELETE FROM secrets WHERE name = ?').run(name);
+  }
+
+  // ---- Login sessions for remote access (M5) ----
+
+  addAuthSession(tokenHash: string, expiresAt: string): void {
+    this.db.prepare('INSERT INTO auth_sessions (token_hash, created_at, expires_at) VALUES (?, ?, ?)').run(tokenHash, now(), expiresAt);
+  }
+
+  authSessionValid(tokenHash: string): boolean {
+    return this.db.prepare('SELECT 1 FROM auth_sessions WHERE token_hash = ? AND expires_at > ?').get(tokenHash, now()) !== undefined;
+  }
+
+  deleteAuthSession(tokenHash: string): void {
+    this.db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').run(tokenHash);
+  }
+
+  deleteAllAuthSessions(): void {
+    this.db.prepare('DELETE FROM auth_sessions').run();
+  }
+}
+
+export interface NodeRow {
+  id: string;
+  name: string;
+  is_local: number;
+  token_hash: string | null;
+  state: NodeState;
+  thread_limit: number;
+  last_seen_at: string | null;
+  resources_json: string | null;
+  info_json: string | null;
+  created_at: string;
+}
+
+export interface SecretRow {
+  name: string;
+  iv: string;
+  tag: string;
+  ciphertext: string;
+  updated_at: string;
 }

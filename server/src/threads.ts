@@ -4,6 +4,8 @@ import path from 'node:path';
 import type {
   ApprovalDecision,
   Message,
+  NodeUpdate,
+  NodeView,
   PostMessageBody,
   Project,
   ProjectUsage,
@@ -18,9 +20,13 @@ import type { EventBus } from './events.js';
 import { APP_MCP_SERVER, toolsFor } from './mcpTools.js';
 import { readMemory, writeMemory } from './memory.js';
 import { CALIBRATION_MS, projectUsage } from './planUsage.js';
-import type { PermissionDecision, PermissionRequest, RunConfig, RunHandle, SessionRunner } from './runners/types.js';
+import { gitCredentialEnv } from './nodes/git.js';
+import type { NodeHub } from './nodes/hub.js';
+import { OFFLINE_AFTER_MS, type NodeInfoReport, type WireRunConfig, type Workspace } from './nodes/protocol.js';
+import type { PermissionDecision, PermissionRequest, RunHandle } from './runners/types.js';
 import { modeLabel, type RuntimeLogger, type RuntimeService } from './runtime.js';
-import type { Store } from './store.js';
+import type { SecretStore } from './secrets.js';
+import type { NodeRow, Store } from './store.js';
 import { assertTransition, isBusy } from './threadState.js';
 
 const NEW_THREAD_TITLE = 'New chat';
@@ -41,6 +47,11 @@ interface ActiveRun {
   /** Identifies the run to the SessionStart hook and the app's MCP server. */
   token: string;
   interrupted: boolean;
+  nodeId: string;
+  /** Its node dropped mid-run: the thread resumes elsewhere instead of failing. */
+  lost: boolean;
+  /** Its node is being drained (hand off after this run) or stopped (interrupted; hand off and continue). */
+  moveAfter: 'drain' | 'stop' | null;
 }
 
 /** Who is calling the app's MCP server: resolved from the per-run token in its request header. */
@@ -59,10 +70,12 @@ export interface ThreadSummary {
 
 export interface ThreadServiceOptions {
   workspacesDir: string;
-  /** Base URL sessions use to call back into this server, e.g. http://127.0.0.1:4317. */
-  serverUrl: () => string;
   maxTurns?: number;
   log: RuntimeLogger;
+  nodes: NodeHub;
+  secrets: SecretStore;
+  /** The server's environment, for an API key to hand to other nodes when none is stored. */
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -74,6 +87,7 @@ export class ThreadService {
   private readonly active = new Map<string, ActiveRun>();
   private readonly runTokens = new Map<string, string>();
   private pumping: Promise<void> = Promise.resolve();
+  private nodesQueued = false;
 
   constructor(
     private readonly store: Store,
@@ -81,7 +95,36 @@ export class ThreadService {
     private readonly approvals: ApprovalStore,
     private readonly bus: EventBus,
     private readonly opts: ThreadServiceOptions,
-  ) {}
+  ) {
+    opts.nodes.handlers = {
+      nodeLost: (nodeId) => this.nodeLost(nodeId),
+      sendRejected: (threadId, text) => this.requeue(threadId, text),
+      workspace: (threadId, cwd) => {
+        if (this.store.getThread(threadId)) this.publishThread(this.store.updateThread(threadId, { worktreePath: cwd }));
+      },
+      pushed: (threadId, branch, commit, wip) =>
+        this.store.getThread(threadId) &&
+        this.addMessage({
+          threadId,
+          runId: null,
+          author: 'system',
+          kind: 'git_push',
+          text: `Pushed ${branch} at ${commit.slice(0, 7)}${wip ? ' with a WIP commit of unfinished work' : ''}`,
+          meta: { branch, commit, wip },
+        }),
+      gitError: (threadId, message) =>
+        this.store.getThread(threadId) && this.addMessage({ threadId, runId: null, author: 'system', kind: 'error', text: message, meta: null }),
+      changed: () => {
+        this.publishNodes();
+        // A node coming back or freeing up may let waiting threads start.
+        if (this.store.threadsWithQueuedInput().length > 0) void this.pump();
+      },
+    };
+  }
+
+  private get nodes(): NodeHub {
+    return this.opts.nodes;
+  }
 
   /** A first project so a new install has somewhere to type, and a project chat for every project. */
   ensureDefaultProject(): void {
@@ -103,11 +146,26 @@ export class ThreadService {
     }
   }
 
-  createProject(name: string, workspacePath: string): Project {
+  /**
+   * A local-folder project works in `workspacePath` on this machine. A repo project (M5) has its
+   * threads clone `repoUrl` on any node; its workspace here only holds the coordinator and MEMORY.md.
+   */
+  createProject(name: string, workspacePath: string, repo: { repoUrl?: string; baseBranch?: string } = {}): Project {
     if (!name.trim()) throw new HttpError(400, 'A project needs a name.');
+    const repoUrl = repo.repoUrl?.trim() || null;
+    if (repoUrl && !/^(https?:\/\/|git@|ssh:\/\/|file:\/\/|\/)/.test(repoUrl)) {
+      throw new HttpError(400, 'The repo URL should look like https://github.com/you/repo.git.');
+    }
+    if (repoUrl && !workspacePath) {
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'project';
+      workspacePath = path.join(this.opts.workspacesDir, `${slug}-${randomUUID().slice(0, 6)}`);
+    }
     if (!path.isAbsolute(workspacePath)) throw new HttpError(400, 'The workspace path must be absolute.');
     fs.mkdirSync(workspacePath, { recursive: true });
-    return this.store.createProject(name.trim(), workspacePath, PROJECT_CHAT_TITLE);
+    return this.store.createProject(name.trim(), workspacePath, PROJECT_CHAT_TITLE, {
+      repoUrl,
+      baseBranch: repoUrl ? repo.baseBranch?.trim() || null : null,
+    });
   }
 
   listProjects(): Project[] {
@@ -136,8 +194,9 @@ export class ThreadService {
       runs: this.store.listRuns(threadId),
       approvals: this.approvals.forThread(threadId),
       resumeCommand: thread.claudeSessionId
-        ? `cd ${shellQuote(project.workspacePath)} && claude --resume ${thread.claudeSessionId}`
+        ? `cd ${shellQuote(thread.worktreePath ?? project.workspacePath)} && claude --resume ${thread.claudeSessionId}`
         : null,
+      resumeNode: thread.nodeId && thread.nodeId !== this.nodes.localNodeId ? (this.store.getNode(thread.nodeId)?.name ?? null) : null,
     };
   }
 
@@ -310,11 +369,17 @@ export class ThreadService {
   private deliver(threadId: string, text: string): 'sent' | 'queued' {
     const active = this.active.get(threadId);
     if (active?.handle.send(text)) return 'sent';
+    this.requeue(threadId, text);
+    return 'queued';
+  }
+
+  /** Queues input for the thread's next run (also where a follow-up lands that a run refused). */
+  private requeue(threadId: string, text: string): void {
+    if (!this.store.getThread(threadId)) return;
     this.store.enqueueInput(threadId, text);
     // A run that refused the input is ending; finishRun moves its thread to queued.
-    if (!active && this.getThread(threadId).status !== 'queued') this.setStatus(threadId, 'queued');
+    if (!this.active.has(threadId) && this.getThread(threadId).status !== 'queued') this.setStatus(threadId, 'queued');
     void this.pump();
-    return 'queued';
   }
 
   /** Starts queued threads while slots are free. Serialized, so two calls never race for a slot. */
@@ -329,73 +394,187 @@ export class ThreadService {
     const waiting = this.store.threadsWithQueuedInput().filter((id) => !this.active.has(id));
     if (waiting.length === 0) return;
 
-    let runner: SessionRunner;
-    try {
-      runner = await this.runtime.activeRunner();
-    } catch (err) {
-      const reason = (err as HttpError).body?.reason;
-      for (const id of waiting) {
-        this.store.takeQueuedInputs(id);
-        this.addMessage({ threadId: id, runId: null, author: 'system', kind: 'error', text: [`Couldn't start: ${(err as Error).message}`, reason].filter(Boolean).join(' '), meta: null });
-        this.setStatus(id, 'failed');
-      }
-      return;
-    }
+    const mode = this.runtime.mode;
+    // The orchestrator's own runner, checked once per pass and only if something is placed here.
+    let localCheck: Promise<Error | null> | undefined;
+    const localReady = () => (localCheck ??= this.runtime.activeRunner().then(() => null, (err: Error) => err));
 
     for (const id of waiting) {
       const thread = this.store.getThread(id);
       if (!thread || this.active.has(id)) continue;
+      if (!mode) {
+        this.failQueued(id, 'Choose a runner mode first.');
+        continue;
+      }
       // The cap is on parallel threads; the coordinator always gets to run so it can hear back.
       if (thread.kind === 'thread' && this.runningThreads() >= this.runtime.concurrency) continue;
+      const project = this.store.getProject(thread.projectId)!;
+      const nodeId = this.place(thread, project, mode);
+      if (!nodeId) continue;
+      if (nodeId === this.nodes.localNodeId) {
+        const err = await localReady();
+        if (err) {
+          this.failQueued(id, `Couldn't start: ${err.message}`, (err as HttpError).body?.reason as string | undefined);
+          continue;
+        }
+      }
       const inputs = this.store.takeQueuedInputs(id);
-      if (inputs.length > 0) this.startRun(thread, runner, inputs.join('\n\n'));
+      if (inputs.length > 0) this.startRun(this.getThread(id), project, nodeId, mode, inputs.join('\n\n'));
     }
   }
 
-  private runningThreads(): number {
+  private failQueued(threadId: string, message: string, reason?: string): void {
+    this.store.takeQueuedInputs(threadId);
+    this.addMessage({ threadId, runId: null, author: 'system', kind: 'error', text: [message, reason].filter(Boolean).join(' '), meta: null });
+    this.setStatus(threadId, 'failed');
+  }
+
+  private runningThreads(nodeId?: string): number {
     let n = 0;
-    for (const run of this.active.values()) if (run.kind === 'thread') n++;
+    for (const run of this.active.values()) if (run.kind === 'thread' && (!nodeId || run.nodeId === nodeId)) n++;
     return n;
+  }
+
+  /**
+   * Which node a thread runs on, or null to keep waiting. The coordinator and local-folder projects
+   * run on this machine. A repo thread stays on its node between runs; it moves only when that node
+   * is drained, stopped, removed or offline for longer than OFFLINE_AFTER_MS, and then goes to the
+   * enabled, ready node with room, preferring one that already has the project cloned.
+   */
+  private place(thread: Thread, project: Project, mode: RunnerMode): string | null {
+    const local = this.nodes.localNodeId;
+    if (thread.kind === 'coordinator') return local;
+    const room = (row: NodeRow) => this.runningThreads(row.id) < row.thread_limit;
+    if (!project.repoUrl) {
+      const row = this.store.getNode(local);
+      return row && room(row) ? local : null;
+    }
+
+    if (thread.nodeId) {
+      const row = this.store.getNode(thread.nodeId);
+      if (row && this.nodes.isOnline(row.id)) {
+        // Draining or stopped: its handoff will release the thread.
+        return row.state === 'enabled' && room(row) ? row.id : null;
+      }
+      if (row && this.nodes.offlineFor(row.id) < OFFLINE_AFTER_MS) return null;
+      this.release(thread.id, thread.nodeId, `node ${row?.name ?? 'that was removed'} went offline; anything it hadn't committed and pushed may be lost`);
+    }
+
+    const candidates = this.store
+      .listNodes()
+      .filter((row) => row.state === 'enabled' && this.nodes.isOnline(row.id) && room(row))
+      .filter((row) => row.id === local || this.readiness(row, this.nodes.info(row.id))[mode].ok)
+      .sort(
+        (a, b) =>
+          Number(this.nodes.hasProject(b.id, project.id)) - Number(this.nodes.hasProject(a.id, project.id)) ||
+          this.runningThreads(a.id) / a.thread_limit - this.runningThreads(b.id) / b.thread_limit,
+      );
+    return candidates[0]?.id ?? null;
+  }
+
+  /** Whether each mode can run on a node: credentials stored here, or the node's own claude login. */
+  private readiness(row: NodeRow, info: NodeInfoReport | null): NodeView['ready'] {
+    if (row.is_local) {
+      const of = (mode: RunnerMode) => {
+        const h = this.runtime.cachedHealth(mode);
+        return h ? { ok: h.ok, reason: h.reason } : { ok: true };
+      };
+      return { subscription: of('subscription'), api: of('api') };
+    }
+    const token = Boolean(this.opts.secrets.get('claude_oauth_token'));
+    const key = Boolean(this.opts.secrets.get('anthropic_api_key') || this.opts.env?.ANTHROPIC_API_KEY?.trim());
+    return {
+      subscription:
+        token || info?.claudeLoggedIn
+          ? { ok: true }
+          : { ok: false, reason: 'No Claude token stored (Settings › Credentials) and the node\'s own claude isn\'t signed in.' },
+      api: key ? { ok: true } : { ok: false, reason: 'No API key stored (Settings › Credentials).' },
+    };
+  }
+
+  /** Credentials for one run, as environment. Other machines get the stored Claude credential; this one keeps using its own login. */
+  private runEnv(mode: RunnerMode, nodeId: string, workspace: Workspace): Record<string, string> {
+    const env: Record<string, string> = workspace.kind === 'repo' ? gitCredentialEnv(this.opts.secrets.get('github_token')) : {};
+    if (nodeId === this.nodes.localNodeId) return env;
+    if (mode === 'subscription') {
+      const token = this.opts.secrets.get('claude_oauth_token');
+      if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    } else {
+      const key = this.opts.secrets.get('anthropic_api_key') || this.opts.env?.ANTHROPIC_API_KEY?.trim();
+      if (key) env.ANTHROPIC_API_KEY = key;
+    }
+    return env;
+  }
+
+  private workspaceFor(thread: Thread, project: Project, fresh: boolean): Workspace {
+    if (thread.kind === 'coordinator' || !project.repoUrl) return { kind: 'folder', path: project.workspacePath };
+    return {
+      kind: 'repo',
+      projectId: project.id,
+      repoUrl: project.repoUrl,
+      baseBranch: project.baseBranch,
+      threadId: thread.id,
+      branch: `thread/${thread.id.slice(0, 8)}`,
+      fresh,
+    };
   }
 
   // ---- Runs ----
 
-  private startRun(thread: Thread, runner: SessionRunner, input: string): void {
-    const project = this.store.getProject(thread.projectId)!;
-    const text = this.needsSeed(thread) ? `${this.coordinatorSeed(thread)}\n\n${input}` : input;
-    const run = this.store.startRun(thread.id, runner.mode);
+  private startRun(thread: Thread, project: Project, nodeId: string, mode: RunnerMode, input: string): void {
+    let text = this.needsSeed(thread) ? `${this.coordinatorSeed(thread)}\n\n${input}` : input;
+    const run = this.store.startRun(thread.id, mode);
     const token = randomUUID();
     this.runTokens.set(token, thread.id);
 
-    this.setStatus(thread.id, 'running', { lastMode: runner.mode });
+    const fresh = thread.nodeId !== nodeId;
+    if (fresh) {
+      const handoff = this.store.handoffOf(thread.id);
+      const to = this.store.getNode(nodeId)?.name ?? 'another node';
+      if (handoff.from && handoff.from !== nodeId) {
+        const from = this.store.getNode(handoff.from)?.name ?? 'a removed node';
+        this.addMessage({ threadId: thread.id, runId: run.id, author: 'system', kind: 'node_moved', text: `Moved from ${from} to ${to}`, meta: { from: handoff.from, to: nodeId } });
+        text = `[Moved] This thread moved from node ${from} to node ${to}, so its working directory is new${handoff.note ? `: ${handoff.note}` : ''}. Its branch has everything that was pushed.\n\n${text}`;
+      }
+      this.store.updateThread(thread.id, { nodeId, worktreePath: null, handoffFrom: null, handoffNote: null });
+    }
+
+    this.setStatus(thread.id, 'running', { lastMode: mode });
     this.addMessage({
       threadId: thread.id,
       runId: run.id,
       author: 'system',
       kind: 'run_started',
-      text: modeLabel(runner.mode),
-      meta: { mode: runner.mode, resumed: Boolean(thread.claudeSessionId) },
+      text: modeLabel(mode),
+      meta: { mode, resumed: Boolean(thread.claudeSessionId), nodeId },
     });
 
-    const cfg: RunConfig = {
-      cwd: project.workspacePath,
-      mcpServers: [
-        { name: APP_MCP_SERVER, type: 'http', url: `${this.opts.serverUrl()}/mcp`, headers: { Authorization: `Bearer ${token}` } },
-      ],
+    const cfg: WireRunConfig = {
+      mcpServers: [{ name: APP_MCP_SERVER, type: 'http', url: '/mcp', headers: { Authorization: `Bearer ${token}` } }],
       allowedTools: toolsFor(thread.kind).map((name) => `mcp__${APP_MCP_SERVER}__${name}`),
       // The coordinator delegates through threads the user can see, not hidden subagents.
       disallowedTools: thread.kind === 'coordinator' ? ['Task', 'Agent'] : undefined,
       appendSystemPrompt: rolePrompt(thread.kind) + memoryPrompt(project),
       permissionMode: 'default',
       maxTurns: this.opts.maxTurns,
-      onPermission: (req) => this.askPermission(thread.id, run.id, req),
-      sessionHookUrl: `${this.opts.serverUrl()}/api/hooks/session-start/${token}`,
+      sessionHookPath: `/api/hooks/session-start/${token}`,
     };
+    const workspace = this.workspaceFor(thread, project, fresh);
 
     const untrack = this.runtime.trackRun();
     let handle: RunHandle;
     try {
-      handle = thread.claudeSessionId ? runner.resume(thread.claudeSessionId, cfg, text) : runner.start(cfg, text);
+      handle = this.nodes.startRun(nodeId, {
+        runId: run.id,
+        threadId: thread.id,
+        mode,
+        cfg,
+        onPermission: (req) => this.askPermission(thread.id, run.id, req),
+        message: text,
+        resumeSessionId: thread.claudeSessionId,
+        workspace,
+        env: this.runEnv(mode, nodeId, workspace),
+      });
     } catch (err) {
       const message = (err as Error).message;
       this.addMessage({ threadId: thread.id, runId: run.id, author: 'system', kind: 'error', text: message, meta: null });
@@ -403,8 +582,9 @@ export class ThreadService {
       untrack();
       return;
     }
-    const active: ActiveRun = { runId: run.id, mode: runner.mode, kind: thread.kind, handle, token, interrupted: false };
+    const active: ActiveRun = { runId: run.id, mode, kind: thread.kind, handle, token, interrupted: false, nodeId, lost: false, moveAfter: null };
     this.active.set(thread.id, active);
+    this.publishNodes();
     void this.consume(thread.id, active).finally(untrack);
   }
 
@@ -509,26 +689,184 @@ export class ThreadService {
     interrupted: boolean,
     finalText: string,
   ): void {
+    const active = this.active.get(threadId);
+    // A run cut off by its node going away, or by Stop now, carries on elsewhere rather than ending the work.
+    const moving = active?.lost ? 'lost' : (active?.moveAfter ?? null);
+    const cutOff = moving === 'lost' || (moving === 'stop' && !result.ok);
     this.active.delete(threadId);
     this.runTokens.delete(token);
     this.approvals.cancelRun(runId);
     const run = this.store.endRun(runId, result);
+    if (cutOff) this.store.enqueueInput(threadId, 'Continue where you left off.');
     const outcome = interrupted ? 'stopped' : result.ok ? 'done' : 'failed';
+    const nodeName = active ? (this.store.getNode(active.nodeId)?.name ?? 'its node') : '';
     this.addMessage({
       threadId,
       runId,
       author: 'system',
       kind: 'run_ended',
-      text: interrupted ? 'Stopped' : result.ok ? 'Done' : 'Failed',
-      meta: { mode: run.mode, ok: result.ok, interrupted, costUsdEstimate: run.costUsdEstimate },
+      text:
+        moving === 'lost'
+          ? `Cut off: ${nodeName} went offline`
+          : cutOff
+            ? `Stopped to move off ${nodeName}`
+            : interrupted
+              ? 'Stopped'
+              : result.ok
+                ? 'Done'
+                : 'Failed',
+      meta: { mode: run.mode, ok: result.ok, interrupted, costUsdEstimate: run.costUsdEstimate, ...(moving && { moving }) },
     });
     const queued = this.store.hasQueuedInput(threadId);
     const status: ThreadStatus = queued ? 'queued' : interrupted ? 'interrupted' : result.ok ? 'idle' : 'failed';
     this.setStatus(threadId, status);
 
     const thread = this.getThread(threadId);
-    if (thread.origin === 'coordinator') this.notifyCoordinator(thread, outcome, finalText);
+    if (thread.origin === 'coordinator' && !cutOff) this.notifyCoordinator(thread, outcome, finalText);
+    if (active && moving === 'lost') {
+      this.release(threadId, active.nodeId, `${nodeName} went offline mid-turn, so anything it hadn't committed and pushed may be lost`);
+    } else if (active && (moving === 'drain' || moving === 'stop')) {
+      void this.handoffThread(threadId, active.nodeId, moving);
+    }
+    this.publishNodes();
     void this.pump();
+  }
+
+  // ---- Nodes (M5, M6) ----
+
+  nodesView(): NodeView[] {
+    return this.nodes.views({
+      ready: (row, info) => this.readiness(row, info),
+      threads: (nodeId) =>
+        this.store.threadsOnNode(nodeId).map((t) => ({
+          id: t.id,
+          projectId: t.projectId,
+          title: t.kind === 'coordinator' ? `${this.store.getProject(t.projectId)?.name ?? 'Project'} · project chat` : t.title,
+          status: t.status,
+          running: this.active.get(t.id)?.nodeId === nodeId,
+        })),
+    });
+  }
+
+  /** Enable, drain or stop a node, or change its name or thread limit. */
+  async updateNode(nodeId: string, update: NodeUpdate): Promise<NodeView> {
+    const row = this.store.getNode(nodeId);
+    if (!row) throw new HttpError(404, 'No such node.');
+    if (update.name !== undefined) {
+      const name = String(update.name).trim();
+      if (!name || name.length > 60) throw new HttpError(400, 'A node name is 1 to 60 characters.');
+      this.store.updateNode(nodeId, { name });
+    }
+    if (update.threadLimit !== undefined) {
+      const limit = Number(update.threadLimit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 32) throw new HttpError(400, 'The thread limit is a whole number from 1 to 32.');
+      this.store.updateNode(nodeId, { thread_limit: limit });
+    }
+    if (update.action === 'enable') {
+      this.store.updateNode(nodeId, { state: 'enabled' });
+    } else if (update.action === 'drain' || update.action === 'stop') {
+      const stop = update.action === 'stop';
+      this.store.updateNode(nodeId, { state: stop ? 'disabled' : 'draining' });
+      this.opts.log.info(`Node ${row.name}: ${stop ? 'stop now' : 'drain'}`);
+      for (const thread of this.movableThreads(nodeId)) {
+        const active = this.active.get(thread.id);
+        if (active?.nodeId === nodeId) {
+          if (active.moveAfter !== 'stop') active.moveAfter = update.action;
+          if (stop) await active.handle.interrupt();
+        } else if (this.nodes.isOnline(nodeId)) {
+          void this.handoffThread(thread.id, nodeId, update.action);
+        } else {
+          this.release(thread.id, nodeId, `${row.name} was offline when it was ${stop ? 'stopped' : 'drained'}, so anything it hadn't committed and pushed may be lost`);
+        }
+      }
+    } else if (update.action !== undefined) {
+      throw new HttpError(400, 'action is one of enable, drain or stop.');
+    }
+    this.checkDrained(nodeId);
+    this.publishNodes();
+    void this.pump();
+    return this.nodesView().find((n) => n.id === nodeId)!;
+  }
+
+  /** Removing a node revokes its token. One that's online has to be drained first so its threads keep their work. */
+  removeNode(nodeId: string): void {
+    const row = this.store.getNode(nodeId);
+    if (!row) throw new HttpError(404, 'No such node.');
+    if (row.is_local) throw new HttpError(400, "This machine's own node can't be removed. Disable it instead.");
+    const left = this.movableThreads(nodeId);
+    if (this.nodes.isOnline(nodeId) && (left.length > 0 || this.runningThreads(nodeId) > 0)) {
+      throw new HttpError(409, `Drain this node first: ${left.length} thread${left.length === 1 ? ' is' : 's are'} still on it.`);
+    }
+    for (const thread of left) this.release(thread.id, nodeId, `${row.name} was removed while offline, so anything it hadn't committed and pushed may be lost`);
+    this.nodes.remove(nodeId);
+    this.publishNodes();
+    void this.pump();
+  }
+
+  /** Threads that can move between nodes: repo threads (the coordinator and local-folder projects stay on this machine). */
+  private movableThreads(nodeId: string): Thread[] {
+    return this.store.threadsOnNode(nodeId).filter((t) => t.kind === 'thread' && Boolean(this.store.getProject(t.projectId)?.repoUrl));
+  }
+
+  /** Runs on a node that dropped are lost; the hub ends them, and finishRun queues them to continue elsewhere. */
+  private nodeLost(nodeId: string): void {
+    for (const run of this.active.values()) if (run.nodeId === nodeId) run.lost = true;
+  }
+
+  /** Handoff steps 2 to 4: the node commits and pushes unfinished work, uploads the transcript, and lets the thread go. */
+  private async handoffThread(threadId: string, nodeId: string, why: 'drain' | 'stop'): Promise<void> {
+    const thread = this.store.getThread(threadId);
+    const project = thread && this.store.getProject(thread.projectId);
+    if (!thread || !project || thread.nodeId !== nodeId) return;
+    const name = this.store.getNode(nodeId)?.name ?? 'the node';
+    const workspace = this.workspaceFor(thread, project, false);
+    const result = await this.nodes.handoff(nodeId, {
+      threadId,
+      workspace,
+      sessionId: thread.claudeSessionId,
+      reason: `handing off from ${name}`,
+      env: this.runEnv(thread.lastMode ?? 'subscription', nodeId, workspace),
+    });
+    const verb = why === 'drain' ? 'drained' : 'stopped';
+    if (!result.ok) {
+      this.addMessage({ threadId, runId: null, author: 'system', kind: 'error', text: `${name} couldn't hand this thread off: ${result.error}`, meta: null });
+    }
+    this.release(
+      threadId,
+      nodeId,
+      !result.ok
+        ? `${name} was ${verb} but couldn't hand off (${result.error}), so anything it hadn't committed and pushed is still there or lost`
+        : result.wip
+          ? `${name} was ${verb}, and its uncommitted work was saved as a WIP commit (${result.commit?.slice(0, 7)}) on the branch`
+          : `${name} was ${verb}`,
+    );
+    void this.pump();
+  }
+
+  /** Lets a thread go from its node; its next run starts on another node and is told why. */
+  private release(threadId: string, nodeId: string, note: string): void {
+    if (!this.store.getThread(threadId)) return;
+    this.publishThread(this.store.updateThread(threadId, { nodeId: null, worktreePath: null, handoffFrom: nodeId, handoffNote: note }));
+    this.checkDrained(nodeId);
+    this.publishNodes();
+  }
+
+  /** A draining node with nothing left on it is disabled. */
+  private checkDrained(nodeId: string): void {
+    const row = this.store.getNode(nodeId);
+    if (row?.state !== 'draining') return;
+    if (this.movableThreads(nodeId).length > 0) return;
+    this.store.updateNode(nodeId, { state: 'disabled' });
+    this.opts.log.info(`Node ${row.name} drained`);
+  }
+
+  private publishNodes(): void {
+    if (this.nodesQueued) return;
+    this.nodesQueued = true;
+    setTimeout(() => {
+      this.nodesQueued = false;
+      this.bus.publish({ type: 'nodes', nodes: this.nodesView() });
+    }, 50).unref();
   }
 
   /** Lifecycle step 5: tell the coordinator a thread it started finished a run, with its final text trimmed. */

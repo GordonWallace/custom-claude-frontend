@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Message, ServerEvent, ThreadDetail } from '@ccf/shared';
 import type { RunEvent } from '../src/runners/types.js';
@@ -52,7 +53,7 @@ describe('posting messages', () => {
       'system:run_ended',
     ]);
     expect(d.runs).toEqual([expect.objectContaining({ mode: 'subscription', ok: true, inputTokens: 100, outputTokens: 5, costUsdEstimate: null })]);
-    expect(d.resumeCommand).toBe('cd /tmp/ccf-test-workspaces/default && claude --resume sess-1');
+    expect(d.resumeCommand).toBe(`cd ${fs.realpathSync(ctx.dir)}/workspaces/default && claude --resume sess-1`);
     expect(ctx.store.listRunEvents(d.runs[0].id).map((e) => e.type)).toContain('tool_use');
   });
 
