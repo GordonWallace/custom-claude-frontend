@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 
-export type Db = Database.Database;
+export type Db = DatabaseSync;
 
 const migrations: string[] = [
   `CREATE TABLE settings (
@@ -14,14 +14,19 @@ const migrations: string[] = [
 /** Opens the SQLite file (or ':memory:') and applies any migrations it hasn't seen. */
 export function openDb(file: string): Db {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  const applied = db.pragma('user_version', { simple: true }) as number;
+  const db = new DatabaseSync(file);
+  db.exec('PRAGMA journal_mode = WAL');
+  const { user_version: applied } = db.prepare('PRAGMA user_version').get() as { user_version: number };
   for (let i = applied; i < migrations.length; i++) {
-    db.transaction(() => {
+    db.exec('BEGIN');
+    try {
       db.exec(migrations[i]);
-      db.pragma(`user_version = ${i + 1}`);
-    })();
+      db.exec(`PRAGMA user_version = ${i + 1}`);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
   }
   return db;
 }

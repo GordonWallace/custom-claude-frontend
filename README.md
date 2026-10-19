@@ -17,8 +17,7 @@ In Subscription mode the app removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`
 
 ## Requirements
 
-- Node.js 20 or newer and pnpm 10 (`corepack enable` gives you pnpm).
-- A C/C++ toolchain, in case `better-sqlite3` has no prebuilt binary for your platform.
+- Node.js 22.13 or newer (the app uses Node's built-in `node:sqlite`, so there is nothing native to compile) and pnpm 10 (`corepack enable` gives you pnpm).
 - For Subscription mode: Claude Code 2.0.0 or newer, signed in (`claude auth login`).
 - For API mode: `ANTHROPIC_API_KEY` set in the environment the server starts in.
 
@@ -72,7 +71,7 @@ Live updates (mode changes and more later) stream over the WebSocket at `/api/ev
 ## Layout
 
 - `shared/`: TypeScript types shared by server and UI.
-- `server/`: Fastify, better-sqlite3, the `SessionRunner` interface and its two runners.
+- `server/`: Fastify, `node:sqlite`, the `SessionRunner` interface and its two runners.
 - `web/`: React and Vite.
 
 `pnpm test`, `pnpm typecheck` and `pnpm build` run across all packages.
