@@ -1,4 +1,4 @@
-import type { RuntimeState } from '@ccf/shared';
+import type { PlanUsage, RuntimeState } from '@ccf/shared';
 import { MODE_LABEL } from '../api';
 
 /** Always-visible statement of which bill a new message lands on. */
@@ -19,6 +19,7 @@ export function ModeBadge({ state, onClick }: { state: RuntimeState | null; onCl
         <span className="badge-dot" aria-hidden />
         {mode ? MODE_LABEL[mode] : 'No mode chosen'}
         {mode === 'api' && <span className="badge-spend">${state.spendUsdEstimate.toFixed(2)} est.</span>}
+        {mode === 'subscription' && state.planUsage && <PlanUsageText usage={state.planUsage} />}
       </button>
       {active && !active.ok && (
         <span className="chip chip-error" title={active.reason}>
@@ -31,5 +32,25 @@ export function ModeBadge({ state, onClick }: { state: RuntimeState | null; onCl
         </span>
       )}
     </div>
+  );
+}
+
+/** Measured account-wide plan usage, as the CLI last reported it. */
+function PlanUsageText({ usage }: { usage: PlanUsage }) {
+  const pct = (u?: { utilization: number }) => (u ? `${Math.round(u.utilization * 100)}%` : '?');
+  const resets = (label: string, w?: { resetsAt?: string }) =>
+    w?.resetsAt ? `${label} resets ${new Date(w.resetsAt).toLocaleString()}` : '';
+  const title = [
+    'Plan usage reported by the claude CLI on its last run (all clients on your account count).',
+    resets('5-hour window', usage.fiveHour),
+    resets('Weekly window', usage.sevenDay),
+    `Reported ${new Date(usage.observedAt).toLocaleString()}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return (
+    <span className="badge-spend" title={title} data-testid="plan-usage">
+      {pct(usage.fiveHour)} of 5h · {pct(usage.sevenDay)} of week
+    </span>
   );
 }
