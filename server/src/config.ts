@@ -15,6 +15,8 @@ export interface AppConfig {
   workspacesDir: string;
   /** Cap on agent turns per run, so a runaway session stops on its own. */
   maxTurns: number;
+  /** API-mode spend at which the header badge turns into a warning; 0 turns the warning off. */
+  spendWarnUsd: number | null;
 }
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -49,5 +51,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     concurrency: Number(fromFile.concurrency ?? 3),
     workspacesDir: path.resolve(repoRoot, String(fromFile.workspacesDir ?? path.join(dataDir, 'workspaces'))),
     maxTurns: Number(fromFile.maxTurns ?? 50),
+    spendWarnUsd: Number(fromFile.spendWarnUsd ?? 10) || null,
   };
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Message, ModeChangedError, ProjectUsage, RunnerMode, Thread, ThreadDetail } from '@ccf/shared';
 import { ApiError, BILLING_CONSEQUENCE, MODE_LABEL, getThread, interruptThread, postMessage, resetCoordinator } from '../api';
 import { ContextMeter } from './ContextMeter';
+import { Markdown } from './Markdown';
 import { MemoryDialog } from './MemoryDialog';
 import { PlanShareLabel } from './PlanShareLabel';
 import { useConnection, useServerEvents } from '../live';
@@ -149,7 +150,7 @@ function Timeline({ messages, threads, openThreadId, onOpenThread }: TimelinePro
             return (
               <div key={m.id} className={`bubble bubble-${m.author}${m.meta?.from === 'coordinator' ? ' bubble-coordinator' : ''}`}>
                 {m.meta?.from === 'coordinator' && <div className="bubble-label muted small">From the coordinator</div>}
-                {m.text}
+                {m.author === 'assistant' ? <Markdown text={m.text} /> : m.text}
                 {m.meta?.queued === true && <span className="muted small"> · sent during the run</span>}
               </div>
             );

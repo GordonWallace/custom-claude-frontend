@@ -36,6 +36,8 @@ export interface RuntimeState {
   concurrency: number;
   /** Estimated spend of all API-mode runs so far. */
   spendUsdEstimate: number;
+  /** Spend at which the header warns, from config (spendWarnUsd); null for no warning. */
+  spendWarnUsd: number | null;
   /** True when ANTHROPIC_API_KEY is set but Subscription mode is active, so the key is ignored for runs. */
   apiKeyIgnored: boolean;
   /** Latest measured plan usage from Subscription-mode runs; null until one has reported it. */

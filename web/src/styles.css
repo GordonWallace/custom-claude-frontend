@@ -801,3 +801,23 @@ button.link {
   padding: 8px;
   resize: vertical;
 }
+
+/* M4: Markdown in Claude's replies */
+.bubble .markdown { white-space: normal; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p, .markdown ul, .markdown ol, .markdown pre, .markdown table, .markdown blockquote { margin: 0 0 0.7em; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { margin: 1em 0 0.4em; line-height: 1.3; }
+.markdown h1 { font-size: 1.3em; }
+.markdown h2 { font-size: 1.15em; }
+.markdown h3, .markdown h4 { font-size: 1em; }
+.markdown ul, .markdown ol { padding-left: 1.4em; }
+.markdown li + li { margin-top: 0.2em; }
+.markdown code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--code-bg, rgba(127,127,127,0.15)); padding: 0.1em 0.3em; border-radius: 4px; }
+.markdown pre { background: var(--code-bg, rgba(127,127,127,0.15)); padding: 0.7em 0.9em; border-radius: 6px; overflow-x: auto; white-space: pre; }
+.markdown pre code { background: none; padding: 0; }
+.markdown blockquote { border-left: 3px solid var(--border, #8884); padding-left: 0.8em; color: var(--muted, inherit); }
+.markdown table { border-collapse: collapse; display: block; overflow-x: auto; }
+.markdown th, .markdown td { border: 1px solid var(--border, #8884); padding: 0.3em 0.6em; text-align: left; }
+.markdown a { color: var(--accent, #4a7cf0); }
+.badge-spend-over { background: var(--error-bg); color: var(--error); padding: 0 6px; border-radius: 999px; font-weight: 600; }

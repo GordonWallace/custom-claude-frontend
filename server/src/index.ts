@@ -27,7 +27,7 @@ const runtime = new RuntimeService(
   { api: new ApiRunner(), subscription: new CliRunner(config.claudePath) },
   new Settings(db),
   bus,
-  { mode: config.mode, concurrency: config.concurrency },
+  { mode: config.mode, concurrency: config.concurrency, spendWarnUsd: config.spendWarnUsd },
   process.env,
   log,
   () => store.apiSpendUsd(),

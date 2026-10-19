@@ -31,7 +31,7 @@ export class RuntimeService {
     private readonly runners: Record<RunnerMode, SessionRunner>,
     private readonly settings: Settings,
     private readonly bus: EventBus,
-    private readonly defaults: { mode: RunnerMode | null; concurrency: number },
+    private readonly defaults: { mode: RunnerMode | null; concurrency: number; spendWarnUsd?: number | null },
     private readonly env: NodeJS.ProcessEnv,
     private readonly log: RuntimeLogger,
     private readonly apiSpend: () => number = () => 0,
@@ -86,6 +86,7 @@ export class RuntimeService {
       activeRuns: this.activeRuns,
       concurrency: this.concurrency,
       spendUsdEstimate: this.apiSpend(),
+      spendWarnUsd: this.defaults.spendWarnUsd ?? null,
       apiKeyIgnored: mode === 'subscription' && Boolean(this.env.ANTHROPIC_API_KEY?.trim()),
       planUsage: this.planUsage(),
     };
