@@ -6,6 +6,7 @@ interface ThreadRow {
   id: string;
   project_id: string;
   kind: Thread['kind'];
+  origin: Thread['origin'];
   title: string;
   status: ThreadStatus;
   claude_session_id: string | null;
@@ -44,6 +45,7 @@ const toThread = (r: ThreadRow): Thread => ({
   id: r.id,
   projectId: r.project_id,
   kind: r.kind,
+  origin: r.origin,
   title: r.title,
   status: r.status,
   claudeSessionId: r.claude_session_id,
@@ -80,44 +82,69 @@ const toRun = (r: RunRow): Run => ({
 export class Store {
   constructor(private readonly db: Db) {}
 
-  createProject(name: string, workspacePath: string): Project {
-    const project = { id: randomUUID(), name, workspacePath, createdAt: now() };
+  /** Inserts the project and the coordinator thread that backs its project chat. */
+  createProject(name: string, workspacePath: string, coordinatorTitle: string): Project {
+    const id = randomUUID();
     this.db
       .prepare('INSERT INTO projects (id, name, workspace_path, created_at) VALUES (?, ?, ?, ?)')
-      .run(project.id, name, workspacePath, project.createdAt);
-    return project;
+      .run(id, name, workspacePath, now());
+    this.createThread(id, 'coordinator', coordinatorTitle);
+    return this.getProject(id)!;
   }
 
   listProjects(): Project[] {
     return (
-      this.db.prepare('SELECT * FROM projects ORDER BY created_at').all() as {
+      this.db
+        .prepare(
+          `SELECT p.*, (SELECT t.id FROM threads t WHERE t.project_id = p.id AND t.kind = 'coordinator' LIMIT 1) AS coordinator_thread_id
+           FROM projects p ORDER BY p.created_at`,
+        )
+        .all() as {
         id: string;
         name: string;
         workspace_path: string;
+        coordinator_thread_id: string | null;
         created_at: string;
       }[]
-    ).map((r) => ({ id: r.id, name: r.name, workspacePath: r.workspace_path, createdAt: r.created_at }));
+    ).map((r) => ({
+      id: r.id,
+      name: r.name,
+      workspacePath: r.workspace_path,
+      coordinatorThreadId: r.coordinator_thread_id ?? '',
+      createdAt: r.created_at,
+    }));
   }
 
   getProject(id: string): Project | undefined {
     return this.listProjects().find((p) => p.id === id);
   }
 
-  createThread(projectId: string, kind: Thread['kind'], title: string): Thread {
+  createThread(projectId: string, kind: Thread['kind'], title: string, origin: Thread['origin'] = 'user'): Thread {
     const id = randomUUID();
     const ts = now();
     this.db
       .prepare(
-        `INSERT INTO threads (id, project_id, kind, title, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'idle', ?, ?)`,
+        `INSERT INTO threads (id, project_id, kind, origin, title, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'idle', ?, ?)`,
       )
-      .run(id, projectId, kind, title, ts, ts);
+      .run(id, projectId, kind, origin, title, ts, ts);
     return this.getThread(id)!;
   }
 
   getThread(id: string): Thread | undefined {
     const row = this.db.prepare('SELECT * FROM threads WHERE id = ?').get(id) as unknown as ThreadRow | undefined;
     return row && toThread(row);
+  }
+
+  /** Projects created before project chats existed have no coordinator row yet. */
+  projectsWithoutCoordinator(): string[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT id FROM projects p WHERE NOT EXISTS (SELECT 1 FROM threads t WHERE t.project_id = p.id AND t.kind = 'coordinator')`,
+        )
+        .all() as { id: string }[]
+    ).map((r) => r.id);
   }
 
   listThreads(projectId: string): Thread[] {
@@ -212,6 +239,40 @@ export class Store {
         payload_json: string;
       }[]
     ).map((r) => ({ seq: r.seq, type: r.type, payload: JSON.parse(r.payload_json) }));
+  }
+
+  enqueueInput(threadId: string, text: string): void {
+    this.db.prepare('INSERT INTO queued_inputs (thread_id, text, created_at) VALUES (?, ?, ?)').run(threadId, text, now());
+  }
+
+  /** Removes and returns a thread's queued inputs, oldest first. */
+  takeQueuedInputs(threadId: string): string[] {
+    const rows = this.db.prepare('SELECT text FROM queued_inputs WHERE thread_id = ? ORDER BY id').all(threadId) as { text: string }[];
+    this.db.prepare('DELETE FROM queued_inputs WHERE thread_id = ?').run(threadId);
+    return rows.map((r) => r.text);
+  }
+
+  hasQueuedInput(threadId: string): boolean {
+    return this.db.prepare('SELECT 1 FROM queued_inputs WHERE thread_id = ? LIMIT 1').get(threadId) !== undefined;
+  }
+
+  /** The newest messages of the given kinds, oldest first. */
+  recentMessages(threadId: string, kinds: MessageKind[], limit: number): Message[] {
+    const marks = kinds.map(() => '?').join(', ');
+    return (
+      this.db
+        .prepare(`SELECT * FROM messages WHERE thread_id = ? AND kind IN (${marks}) ORDER BY id DESC LIMIT ?`)
+        .all(threadId, ...kinds, limit) as unknown as MessageRow[]
+    )
+      .map(toMessage)
+      .reverse();
+  }
+
+  /** Threads with queued input, in the order their oldest input arrived. */
+  threadsWithQueuedInput(): string[] {
+    return (
+      this.db.prepare('SELECT thread_id FROM queued_inputs GROUP BY thread_id ORDER BY MIN(id)').all() as { thread_id: string }[]
+    ).map((r) => r.thread_id);
   }
 
   apiSpendUsd(): number {

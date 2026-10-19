@@ -5,11 +5,14 @@ import type { ThreadStatus } from '@ccf/shared';
  * impossible move (say, idle straight to awaiting_permission) is a bug that fails loudly.
  */
 const allowed: Record<ThreadStatus, readonly ThreadStatus[]> = {
-  idle: ['running'],
-  running: ['awaiting_permission', 'idle', 'failed', 'interrupted'],
-  awaiting_permission: ['running', 'idle', 'failed', 'interrupted'],
-  interrupted: ['running'],
-  failed: ['running'],
+  idle: ['queued', 'running'],
+  // A queued thread starts when a slot frees up; stopping it drops its queued input.
+  queued: ['running', 'idle', 'failed'],
+  // A run that ends with input still queued for its thread goes straight back to queued.
+  running: ['awaiting_permission', 'idle', 'queued', 'failed', 'interrupted'],
+  awaiting_permission: ['running', 'idle', 'queued', 'failed', 'interrupted'],
+  interrupted: ['queued', 'running'],
+  failed: ['queued', 'running'],
 };
 
 export function canTransition(from: ThreadStatus, to: ThreadStatus): boolean {

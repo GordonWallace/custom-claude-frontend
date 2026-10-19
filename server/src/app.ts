@@ -6,6 +6,7 @@ import type { ApprovalDecision, PostMessageBody, RuntimeUpdate, ServerEvent } fr
 import { isRunnerMode } from './config.js';
 import type { EventBus } from './events.js';
 import { HttpError } from './errors.js';
+import { registerMcpRoutes } from './mcp.js';
 import type { RuntimeService } from './runtime.js';
 import type { ThreadService } from './threads.js';
 
@@ -90,6 +91,9 @@ export async function buildApp({ runtime, threads, bus, webDist, logger }: AppDe
     '/api/hooks/session-start/:token',
     async (req, reply) => reply.status(threads.handleSessionHook(req.params.token, req.body ?? {}) ? 204 : 404).send(),
   );
+
+  // The app's own MCP server, which every session gets (coordinator tools, memory).
+  registerMcpRoutes(app, threads);
 
   app.get('/api/events', { websocket: true }, (socket) => {
     const send = (event: ServerEvent) => socket.send(JSON.stringify(event));

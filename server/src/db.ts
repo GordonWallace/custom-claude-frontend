@@ -57,6 +57,14 @@ const migrations: string[] = [
      payload_json TEXT NOT NULL
    );
    CREATE INDEX run_events_run ON run_events (run_id, seq);`,
+  `ALTER TABLE threads ADD COLUMN origin TEXT NOT NULL DEFAULT 'user';
+   CREATE TABLE queued_inputs (
+     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+     thread_id  TEXT NOT NULL REFERENCES threads(id),
+     text       TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   );
+   CREATE INDEX queued_inputs_thread ON queued_inputs (thread_id, id);`,
 ];
 
 /** Opens the SQLite file (or ':memory:') and applies any migrations it hasn't seen. */

@@ -14,7 +14,7 @@ afterEach(async () => {
 async function firstThread(c: Ctx) {
   c.threads.ensureDefaultProject();
   const [project] = c.threads.listProjects();
-  return c.threads.listThreads(project.id)[0];
+  return c.threads.createThread(project.id);
 }
 
 const post = (c: Ctx, threadId: string, payload: object) =>

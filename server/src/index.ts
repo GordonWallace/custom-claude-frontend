@@ -44,3 +44,5 @@ threads.ensureDefaultProject();
 const app = await buildApp({ runtime, threads, bus, webDist: path.join(repoRoot, 'web/dist'), logger });
 await runtime.logStartup();
 await app.listen({ host: config.host, port: config.port });
+// Start input that was queued before the restart, now that sessions can reach the MCP server.
+void threads.pump();
