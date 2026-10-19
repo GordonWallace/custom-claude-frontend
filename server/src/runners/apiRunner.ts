@@ -1,14 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { RunConfig, RunHandle, RunnerHealth, SessionRunner } from './types.js';
-import { NotImplementedError } from './types.js';
+import { type LaunchProfile, type QueryFn, SdkRunner } from './sdkRunner.js';
+import type { RunnerHealth } from './types.js';
 
-/** API mode: the Agent SDK, billed to ANTHROPIC_API_KEY. */
-export class ApiRunner implements SessionRunner {
+/** API mode: the Agent SDK's bundled Claude Code, billed to ANTHROPIC_API_KEY. */
+export class ApiRunner extends SdkRunner {
   readonly mode = 'api' as const;
 
-  constructor(private readonly env: NodeJS.ProcessEnv = process.env) {}
+  constructor(
+    private readonly env: NodeJS.ProcessEnv = process.env,
+    queryFn?: QueryFn,
+  ) {
+    super(queryFn);
+  }
+
+  protected launchProfile(): LaunchProfile {
+    return { env: { ...this.env } };
+  }
 
   async health(): Promise<RunnerHealth> {
     const checkedAt = new Date().toISOString();
@@ -28,13 +37,6 @@ export class ApiRunner implements SessionRunner {
     return { mode: this.mode, ok: true, version, credentialSource: 'ANTHROPIC_API_KEY (environment)', checkedAt };
   }
 
-  start(_cfg: RunConfig, _firstMessage: string): RunHandle {
-    throw new NotImplementedError('ApiRunner.start');
-  }
-
-  resume(_sessionId: string, _cfg: RunConfig, _message: string): RunHandle {
-    throw new NotImplementedError('ApiRunner.resume');
-  }
 }
 
 function sdkVersion(): string | undefined {

@@ -52,8 +52,9 @@ describe('PUT /api/runtime', () => {
     expect(res.json<RuntimeState>().mode).toBe('api');
     expect(ctx.settings.get('runtime.mode')).toBe('api');
     expect(ctx.logs.at(-1)).toContain('unset -> api; credential: fake api credential');
-    expect(events).toHaveLength(1);
-    expect(events[0].state.mode).toBe('api');
+    const runtimeEvents = events.filter((e) => e.type === 'runtime');
+    expect(runtimeEvents).toHaveLength(1);
+    expect(runtimeEvents[0].state.mode).toBe('api');
   });
 
   it('refuses with 409 and the reason when the target runner is unhealthy', async () => {
@@ -103,6 +104,6 @@ describe('WS /api/events', () => {
     received.push(await changed);
     ws.close();
 
-    expect(received.map((e) => e.state.mode)).toEqual([null, 'subscription']);
+    expect(received.map((e) => (e.type === 'runtime' ? e.state.mode : e.type))).toEqual([null, 'subscription']);
   });
 });

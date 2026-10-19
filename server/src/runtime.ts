@@ -1,19 +1,15 @@
-import type { RunnerHealth, RunnerMode, RuntimeState } from '@ccf/shared';
+import type { PlanUsage, RunnerHealth, RunnerMode, RuntimeState } from '@ccf/shared';
 import { isRunnerMode } from './config.js';
+import { HttpError } from './errors.js';
 import type { Settings } from './db.js';
 import type { EventBus } from './events.js';
 import type { SessionRunner } from './runners/types.js';
 
 const HEALTH_TTL_MS = 15_000;
 
-export class RuntimeError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string,
-    readonly reason?: string,
-    readonly health?: RunnerHealth,
-  ) {
-    super(message);
+export class RuntimeError extends HttpError {
+  constructor(statusCode: number, message: string, reason?: string, health?: RunnerHealth) {
+    super(statusCode, message, { reason, health });
   }
 }
 
@@ -38,6 +34,7 @@ export class RuntimeService {
     private readonly defaults: { mode: RunnerMode | null; concurrency: number },
     private readonly env: NodeJS.ProcessEnv,
     private readonly log: RuntimeLogger,
+    private readonly apiSpend: () => number = () => 0,
   ) {}
 
   get mode(): RunnerMode | null {
@@ -50,11 +47,26 @@ export class RuntimeService {
     return Number.isInteger(stored) && stored > 0 ? stored : this.defaults.concurrency;
   }
 
-  /** The runner new runs should use. Throws if no mode has been chosen yet. */
-  activeRunner(): SessionRunner {
+  /** The runner new runs should use. Throws 409 if no mode is chosen or its runner isn't usable. */
+  async activeRunner(): Promise<SessionRunner> {
     const mode = this.mode;
-    if (!mode) throw new RuntimeError(409, 'No runner mode has been chosen yet.');
+    if (!mode) throw new RuntimeError(409, 'Choose a runner mode first.');
+    const health = await this.health(mode);
+    if (!health.ok) throw new RuntimeError(409, `${modeLabel(mode)} isn't ready.`, health.reason, health);
     return this.runners[mode];
+  }
+
+  /** Counts a run in flight; call the returned function once when it ends. */
+  trackRun(): () => void {
+    this.activeRuns++;
+    void this.publish();
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      this.activeRuns--;
+      void this.publish();
+    };
   }
 
   async health(mode: RunnerMode, refresh = false): Promise<RunnerHealth> {
@@ -73,8 +85,9 @@ export class RuntimeService {
       health: { api, subscription },
       activeRuns: this.activeRuns,
       concurrency: this.concurrency,
-      spendUsdEstimate: 0,
+      spendUsdEstimate: this.apiSpend(),
       apiKeyIgnored: mode === 'subscription' && Boolean(this.env.ANTHROPIC_API_KEY?.trim()),
+      planUsage: this.planUsage(),
     };
   }
 
@@ -99,6 +112,24 @@ export class RuntimeService {
     return this.publish();
   }
 
+  planUsage(): PlanUsage | null {
+    const stored = this.settings.get('plan.usage');
+    return stored ? (JSON.parse(stored) as PlanUsage) : null;
+  }
+
+  /** Stores the plan usage a Subscription-mode run reported, keeping windows the report left out. */
+  recordPlanUsage(update: Omit<PlanUsage, 'observedAt'>): void {
+    const previous = this.planUsage();
+    const usage: PlanUsage = {
+      fiveHour: update.fiveHour ?? previous?.fiveHour,
+      sevenDay: update.sevenDay ?? previous?.sevenDay,
+      status: update.status,
+      observedAt: new Date().toISOString(),
+    };
+    this.settings.set('plan.usage', JSON.stringify(usage));
+    void this.publish();
+  }
+
   /** Logs the mode and where its credential comes from; called once at startup. */
   async logStartup(): Promise<void> {
     const mode = this.mode;
@@ -117,7 +148,8 @@ export class RuntimeService {
     }
   }
 
-  private async publish(): Promise<RuntimeState> {
+  /** Pushes the current state to every open view (after a mode switch, or when runs start or end). */
+  async publish(): Promise<RuntimeState> {
     const state = await this.state();
     this.bus.publish({ type: 'runtime', state });
     return state;

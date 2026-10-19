@@ -11,6 +11,10 @@ export interface AppConfig {
   dataDir: string;
   claudePath: string;
   concurrency: number;
+  /** Where new projects' workspaces go by default. */
+  workspacesDir: string;
+  /** Cap on agent turns per run, so a runaway session stops on its own. */
+  maxTurns: number;
 }
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -43,5 +47,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dataDir: path.resolve(repoRoot, dataDir),
     claudePath: String(env.CCF_CLAUDE_PATH ?? fromFile.claudePath ?? 'claude'),
     concurrency: Number(fromFile.concurrency ?? 3),
+    workspacesDir: path.resolve(repoRoot, String(fromFile.workspacesDir ?? path.join(dataDir, 'workspaces'))),
+    maxTurns: Number(fromFile.maxTurns ?? 50),
   };
 }

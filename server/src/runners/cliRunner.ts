@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
-import type { RunConfig, RunHandle, RunnerHealth, SessionRunner } from './types.js';
-import { NotImplementedError } from './types.js';
+import { type LaunchProfile, type QueryFn, SdkRunner } from './sdkRunner.js';
+import type { RunnerHealth } from './types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -28,14 +30,25 @@ interface AuthStatus {
   apiProvider?: string;
 }
 
-/** Subscription mode: the user's installed claude CLI over stream-json, with their own login. */
-export class CliRunner implements SessionRunner {
+/**
+ * Subscription mode: the Agent SDK driving the user's own installed, signed-in claude CLI, with API
+ * credentials stripped from its environment so usage comes from their Claude plan.
+ */
+export class CliRunner extends SdkRunner {
   readonly mode = 'subscription' as const;
 
   constructor(
     private readonly claudePath: string,
     private readonly env: NodeJS.ProcessEnv = process.env,
-  ) {}
+    queryFn?: QueryFn,
+  ) {
+    super(queryFn);
+  }
+
+  protected launchProfile(): LaunchProfile {
+    const env = subscriptionEnv(this.env);
+    return { executablePath: resolveExecutable(this.claudePath, env.PATH), env };
+  }
 
   async health(): Promise<RunnerHealth> {
     const checkedAt = new Date().toISOString();
@@ -100,13 +113,6 @@ export class CliRunner implements SessionRunner {
     };
   }
 
-  start(_cfg: RunConfig, _firstMessage: string): RunHandle {
-    throw new NotImplementedError('CliRunner.start');
-  }
-
-  resume(_sessionId: string, _cfg: RunConfig, _message: string): RunHandle {
-    throw new NotImplementedError('CliRunner.resume');
-  }
 
   private async exec(args: string[]): Promise<string> {
     const { stdout } = await execFileAsync(this.claudePath, args, {
@@ -115,6 +121,19 @@ export class CliRunner implements SessionRunner {
     });
     return stdout;
   }
+}
+
+/** The SDK wants a path, not a bare command name, so look `claude` up on PATH the way a shell would. */
+export function resolveExecutable(command: string, searchPath = ''): string {
+  if (command.includes('/') || command.includes('\\')) return path.resolve(command);
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', ''] : [''];
+  for (const dir of searchPath.split(path.delimiter).filter(Boolean)) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, command + ext);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return command;
 }
 
 function parseJson(text: string | undefined): unknown {
