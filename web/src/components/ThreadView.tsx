@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Message, ModeChangedError, RunnerMode, Thread, ThreadDetail } from '@ccf/shared';
-import { ApiError, BILLING_CONSEQUENCE, MODE_LABEL, getThread, interruptThread, postMessage } from '../api';
+import type { Message, ModeChangedError, ProjectUsage, RunnerMode, Thread, ThreadDetail } from '@ccf/shared';
+import { ApiError, BILLING_CONSEQUENCE, MODE_LABEL, getThread, interruptThread, postMessage, resetCoordinator } from '../api';
+import { ContextMeter } from './ContextMeter';
+import { MemoryDialog } from './MemoryDialog';
+import { PlanShareLabel } from './PlanShareLabel';
 import { useConnection, useServerEvents } from '../live';
 import { ApprovalCard, ToolInput } from './ApprovalCard';
 import { StatusPill } from './StatusPill';
@@ -14,11 +17,14 @@ interface Props {
   onOpenThread?: (threadId: string) => void;
   /** Right pane only: closes it. */
   onClose?: () => void;
+  /** Estimated plan usage for the project's threads. */
+  usage?: ProjectUsage | null;
 }
 
 /** A conversation: the project chat (the coordinator) in the centre pane, or one thread in the right pane. */
-export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onClose }: Props) {
+export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onClose, usage }: Props) {
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
+  const [dialog, setDialog] = useState<'memory' | 'reset'>();
   const { epoch } = useConnection();
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -69,6 +75,16 @@ export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onCl
           <h2>{isChat ? detail.project.name : thread.title}</h2>
           {isChat && <span className="muted">Project chat</span>}
           <StatusPill status={thread.status} />
+          {isChat && (
+            <span className="head-actions">
+              <button type="button" className="link" onClick={() => setDialog('memory')}>
+                Memory
+              </button>
+              <button type="button" className="link" onClick={() => setDialog('reset')} disabled={busy || thread.status === 'queued'}>
+                Fresh session
+              </button>
+            </span>
+          )}
           {onClose && (
             <button type="button" className="link close" onClick={onClose} aria-label="Close thread">
               Close
@@ -78,7 +94,12 @@ export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onCl
         <div className="thread-meta muted small">
           {thread.origin === 'coordinator' && <span>Started by the coordinator</span>}
           {thread.lastMode ? <span className={`mode-tag mode-tag-${thread.lastMode}`}>Last ran: {MODE_LABEL[thread.lastMode]}</span> : <span>Not run yet</span>}
-          {thread.contextTokens !== null && <span title="Context size of the latest turn">Context {formatTokens(thread.contextTokens)} tokens</span>}
+          <ContextMeter thread={thread} />
+          <PlanShareLabel
+            share={isChat ? usage?.project : usage?.threads[thread.id]}
+            calibration={usage?.calibration.sevenDay}
+            scope={isChat ? 'project' : 'thread'}
+          />
           {detail.resumeCommand && <ResumeCommand command={detail.resumeCommand} />}
         </div>
       </header>
@@ -98,6 +119,9 @@ export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onCl
       </div>
 
       <Composer threadId={threadId} busy={busy} queued={thread.status === 'queued'} isChat={isChat} />
+
+      {dialog === 'memory' && <MemoryDialog projectId={detail.project.id} onClose={() => setDialog(undefined)} />}
+      {dialog === 'reset' && <ResetDialog projectId={detail.project.id} onClose={() => setDialog(undefined)} />}
     </section>
   );
 }
@@ -192,8 +216,14 @@ function Timeline({ messages, threads, openThreadId, onOpenThread }: TimelinePro
           }
           case 'compacted':
             return (
-              <div key={m.id} className="run-divider">
-                <span>Context compacted</span>
+              <div key={m.id} className="run-divider run-divider-compacted" data-testid="compacted">
+                <span>{m.text}</span>
+              </div>
+            );
+          case 'session_reset':
+            return (
+              <div key={m.id} className="run-divider run-divider-reset">
+                <span>Fresh coordinator session · earlier messages stay here but the coordinator no longer has them</span>
               </div>
             );
           case 'error':
@@ -316,6 +346,34 @@ function Composer({ threadId, busy, queued, isChat }: { threadId: string; busy: 
   );
 }
 
+function ResetDialog({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const [error, setError] = useState<string>();
+  return (
+    <div className="overlay" role="dialog" aria-modal aria-labelledby="reset-title">
+      <div className="dialog">
+        <h2 id="reset-title">Start a fresh coordinator session?</h2>
+        <p>
+          The coordinator's next reply starts a new session that knows the project memory and the list of threads, but not
+          this conversation. Use it when the project chat has grown large. Threads keep their own sessions.
+        </p>
+        {error && <p className="error small">{error}</p>}
+        <div className="dialog-actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="primary primary-subscription"
+            onClick={() => void resetCoordinator(projectId).then(onClose, (e: Error) => setError(e.message))}
+          >
+            Start fresh
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ResumeCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -340,8 +398,4 @@ function toolSummary(name: string, input: unknown): string {
   const value = i.command ?? i.file_path ?? i.pattern ?? i.url ?? i.description;
   const text = typeof value === 'string' ? value : '';
   return text.length > 80 ? `${text.slice(0, 77)}…` : text;
-}
-
-function formatTokens(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }

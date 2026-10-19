@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { Project, Thread } from '@ccf/shared';
-import { listProjects, listThreads } from './api';
+import type { Project, ProjectUsage, Thread } from '@ccf/shared';
+import { getUsage, listProjects, listThreads } from './api';
 import { useConnection, useServerEvents } from './live';
 
 /** All projects, refetched after a reconnect. */
@@ -33,4 +33,22 @@ export function useThreads(projectId: string | undefined): Thread[] {
   });
 
   return threads;
+}
+
+/** Estimated plan usage per thread and for the project, refetched whenever one of its runs ends. */
+export function useProjectUsage(projectId: string | undefined): ProjectUsage | null {
+  const [usage, setUsage] = useState<ProjectUsage | null>(null);
+  const [version, setVersion] = useState(0);
+  const { epoch } = useConnection();
+
+  useEffect(() => {
+    if (!projectId) return;
+    void getUsage(projectId).then(setUsage, () => setUsage(null));
+  }, [projectId, epoch, version]);
+
+  useServerEvents((event) => {
+    if (event.type === 'message' && event.message.kind === 'run_ended') setVersion((v) => v + 1);
+  });
+
+  return usage;
 }

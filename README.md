@@ -2,7 +2,7 @@
 
 A local, single-user, Projects-style web app: a coordinator session starts threads that run in parallel, each backed by Claude Code.
 
-> **Status: milestone M2.** Each project has a project chat with a coordinator that starts threads, which run in parallel up to a concurrency cap and report back when they finish. Threads run real Claude Code sessions in either mode, with tool approvals in the UI, stop, resume across restarts and the measured plan usage in the header. Memory injection and the context meter arrive in M3.
+> **Status: milestone M3.** Each project has a project chat with a coordinator that starts threads, which run in parallel up to a concurrency cap and report back when they finish. Every session gets the project's memory file, shows how full its context is and marks compactions, and Subscription work shows its estimated share of your plan. Threads run real Claude Code sessions in either mode, with tool approvals in the UI, stop and resume across restarts.
 
 ## Runner modes
 
@@ -45,6 +45,10 @@ The screen has three panes: projects and their threads on the left, the project 
 - When a thread the coordinator started finishes a run, the coordinator gets a notice with the thread's outcome and its final message, which threads are told to make a summary of no more than 2,000 characters. If something doesn't fit, the summary tells the coordinator to read the full thread. A summary that runs past 4,000 characters is cut, with a note saying where the rest is. You can also message any thread directly, and **New chat** starts a thread of your own that doesn't report back.
 - Each run shows which mode it ran in. If you switch modes, the next message in an older thread asks once before continuing it in the new mode. Both modes share the same on-disk session, so the conversation carries over.
 - When Claude wants to use a tool that needs approval, the thread shows **Waiting on you** and an approval card (Allow, Allow for this session, Deny). Approvals survive a page reload.
+- **Project memory** is `MEMORY.md` in the project folder. Every session gets it in its prompt and adds durable facts and decisions to it with the memory tools, so something one thread learns is known by the next. **Memory** in the project chat's header edits it.
+- **The context meter** in each header shows how full the session's context window is, with a tick where Claude Code compacts automatically. A compaction shows in the timeline with the size before and after.
+- **Fresh session** in the project chat's header retires the coordinator's session when the chat has grown large. Its next reply starts a new session that knows the memory and the list of threads but not the earlier conversation.
+- **Plan share** in each header estimates what that thread (or, in the project chat, the whole project) has used of your plan's weekly and 5-hour windows. Your plan only reports an account-wide total, so the app splits it by each run's API-price value and learns from your own meter how many points a dollar of work moves it. Until the meter has moved during app work, it says "calibrating" and shows the API-price value instead. Usage from claude.ai or other clients isn't charged to any thread.
 - **Stop** interrupts the current run. Runs cut off by a server restart are marked stopped; the next message resumes the session.
 - **Copy terminal resume command** gives `cd <workspace> && claude --resume <session>`, which opens the thread in your own terminal. (The CLI's interactive `/resume` picker doesn't list sessions started this way; resuming by id works.)
 - Plan usage is the account-wide figure the CLI reports on each Subscription run (an undocumented signal), so usage from claude.ai or other clients counts too.
@@ -91,6 +95,9 @@ Threads:
 | `GET /api/threads/:id` | Thread, messages, runs, pending approvals and the resume command |
 | `POST /api/threads/:id/messages` | Send `{ "text" }`; `409 mode_changed` asks you to resend with `"continueInMode"` |
 | `POST /api/threads/:id/interrupt` | Stop the current run |
+| `GET` / `PUT /api/projects/:id/memory` | Read or replace the project's `MEMORY.md` (`{ "text" }`) |
+| `GET /api/projects/:id/usage` | Estimated plan share per thread and for the project, with the calibration behind it |
+| `POST /api/projects/:id/coordinator/reset` | Start a fresh coordinator session on the next message |
 | `POST /api/approvals/:id` | Answer `{ "behavior": "allow" \| "deny", "always"?: true }` |
 | `GET /api/runs/:id/events` | Normalized events of one run |
 

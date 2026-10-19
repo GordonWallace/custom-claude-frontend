@@ -731,3 +731,73 @@ button.link {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- M3: context meter, plan share, memory ---- */
+.context-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.context-bar {
+  position: relative;
+  width: 64px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: visible;
+}
+
+.context-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--sub);
+}
+
+.context-meter.near .context-fill {
+  background: var(--warn);
+}
+
+.context-meter.near {
+  color: var(--warn);
+}
+
+.context-tick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--text);
+  opacity: 0.5;
+}
+
+.plan-share {
+  color: var(--sub);
+}
+
+.head-actions {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.run-divider-compacted span,
+.run-divider-reset span {
+  color: var(--warn);
+}
+
+.memory-dialog {
+  max-width: 720px;
+}
+
+.memory-dialog textarea {
+  width: 100%;
+  font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  resize: vertical;
+}

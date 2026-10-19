@@ -7,7 +7,7 @@ import { Sidebar } from './components/Sidebar';
 import { SwitchDialog } from './components/SwitchDialog';
 import { ThreadView } from './components/ThreadView';
 import { useRuntime } from './useRuntime';
-import { useProjects, useThreads } from './useThreads';
+import { useProjects, useProjectUsage, useThreads } from './useThreads';
 
 export function App() {
   const { state, connected, setState, refresh } = useRuntime();
@@ -17,6 +17,7 @@ export function App() {
   const [projects, addProject] = useProjects();
   const project = projects.find((p) => p.id === route.projectId) ?? projects[0];
   const threads = useThreads(project?.id);
+  const usage = useProjectUsage(project?.id);
   const threadId = route.projectId === project?.id ? route.threadId : undefined;
 
   const firstLaunch = state !== null && state.mode === null;
@@ -64,12 +65,13 @@ export function App() {
                 threads={threads}
                 openThreadId={threadId}
                 onOpenThread={(id) => navigate(project.id, id)}
+                usage={usage}
               />
             ) : (
               <section className="thread-view muted">Loading…</section>
             )}
             {project && threadId && (
-              <ThreadView key={threadId} threadId={threadId} threads={threads} onClose={() => navigate(project.id)} />
+              <ThreadView key={threadId} threadId={threadId} threads={threads} onClose={() => navigate(project.id)} usage={usage} />
             )}
           </div>
         )}

@@ -3,6 +3,7 @@ import type {
   Message,
   PostMessageBody,
   Project,
+  ProjectUsage,
   RunnerMode,
   RuntimeError,
   RuntimeState,
@@ -45,6 +46,11 @@ export const getThread = (id: string) => request<ThreadDetail>('GET', `/api/thre
 export const postMessage = (id: string, body: PostMessageBody) =>
   request<Message>('POST', `/api/threads/${id}/messages`, body);
 export const interruptThread = (id: string) => request<{ ok: true }>('POST', `/api/threads/${id}/interrupt`);
+export const getMemory = (projectId: string) => request<{ text: string }>('GET', `/api/projects/${projectId}/memory`);
+export const putMemory = (projectId: string, text: string) =>
+  request<{ text: string }>('PUT', `/api/projects/${projectId}/memory`, { text });
+export const getUsage = (projectId: string) => request<ProjectUsage>('GET', `/api/projects/${projectId}/usage`);
+export const resetCoordinator = (projectId: string) => request<Thread>('POST', `/api/projects/${projectId}/coordinator/reset`);
 export const decideApproval = (id: string, decision: ApprovalDecision) =>
   request<{ ok: true }>('POST', `/api/approvals/${id}`, decision);
 
