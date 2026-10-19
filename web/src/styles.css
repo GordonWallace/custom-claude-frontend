@@ -1,0 +1,317 @@
+:root {
+  --bg: #faf9f7;
+  --surface: #ffffff;
+  --text: #1f1e1c;
+  --muted: #6b6862;
+  --border: #e3e0da;
+  --sub: #1f7a5c;
+  --sub-bg: #e3f4ec;
+  --api: #a5530a;
+  --api-bg: #fdecd8;
+  --warn: #8a6100;
+  --warn-bg: #fff4cc;
+  --error: #b42318;
+  --error-bg: #fde8e6;
+  color-scheme: light;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1b19;
+    --surface: #262522;
+    --text: #ecebe8;
+    --muted: #a19e97;
+    --border: #3a3834;
+    --sub: #5fd3a5;
+    --sub-bg: #173a2d;
+    --api: #f5a65b;
+    --api-bg: #4a2a0c;
+    --warn: #f3cf5b;
+    --warn-bg: #3d3110;
+    --error: #ff8a80;
+    --error-bg: #4a1714;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 8px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+input {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  width: 80px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+}
+
+.error {
+  color: var(--error);
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* Mode badge: the two modes must never look alike. */
+.badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 5px 14px;
+  border: 2px solid transparent;
+}
+
+.badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.badge-subscription {
+  color: var(--sub);
+  background: var(--sub-bg);
+  border-color: var(--sub);
+}
+
+.badge-api {
+  color: var(--api);
+  background: var(--api-bg);
+  border-color: var(--api);
+  border-style: dashed;
+}
+
+.badge-unset,
+.badge-unknown {
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+.badge-spend {
+  font-weight: 500;
+  padding-left: 8px;
+  border-left: 1px solid currentColor;
+}
+
+.chip {
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-warn {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.chip-error {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: 48px 16px;
+}
+
+.first-launch,
+.empty {
+  max-width: 720px;
+  width: 100%;
+}
+
+/* Mode option cards, used by first launch and settings. */
+.mode-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.mode-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  text-align: left;
+  padding: 14px;
+  border-width: 2px;
+}
+
+.mode-option-subscription.current,
+.mode-option-subscription:hover:not(:disabled) {
+  border-color: var(--sub);
+}
+
+.mode-option-api.current,
+.mode-option-api:hover:not(:disabled) {
+  border-color: var(--api);
+}
+
+.mode-option:disabled {
+  opacity: 1;
+}
+
+.tag {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.health {
+  font-size: 12px;
+}
+
+.health.ok {
+  color: var(--sub);
+}
+
+.health.bad {
+  color: var(--error);
+}
+
+/* Settings drawer */
+.settings {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 100vw);
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  padding: 16px;
+  overflow-y: auto;
+  box-shadow: -8px 0 24px rgb(0 0 0 / 0.12);
+}
+
+.settings section {
+  margin-top: 24px;
+}
+
+.settings-head,
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.inline-form {
+  display: flex;
+  gap: 8px;
+}
+
+/* Confirmation dialog */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.dialog {
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 20px;
+  max-width: 460px;
+  width: 100%;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.primary {
+  color: #fff;
+  border: none;
+}
+
+.primary-subscription {
+  background: #1f7a5c;
+}
+
+.primary-api {
+  background: #a5530a;
+}

@@ -1,0 +1,7 @@
+{
+  "mode": "subscription",
+  "port": 4317,
+  "dataDir": "./data",
+  "claudePath": "claude",
+  "concurrency": 3
+}

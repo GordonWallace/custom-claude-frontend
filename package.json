@@ -1,0 +1,16 @@
+{
+  "name": "custom-claude-frontend",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter ./server --filter ./web dev",
+    "build": "pnpm -r build",
+    "start": "pnpm --filter ./server start",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  }
+}
