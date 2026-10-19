@@ -124,7 +124,8 @@ describe('completion notices', () => {
     expect(status(ctx, a.id)).toBe('idle');
     const notice = ctx.runners.subscription.calls[1];
     expect(notice.message).toMatch(new RegExp(`^\\[Thread update\\] "Research A" \\(thread_id: ${a.id}\\) finished\\.`));
-    expect(notice.message.length).toBeLessThan(1700);
+    expect(notice.message.length).toBeLessThan(4200);
+    expect(notice.message).toMatch(/\[Cut at 4,000 characters\. Use read_thread for the full message\.\]$/);
     expect(ctx.store.listMessages(p.coordinatorThreadId).map((m) => m.kind)).toEqual([
       'thread_started',
       'thread_notice',

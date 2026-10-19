@@ -23,8 +23,11 @@ import { assertTransition, isBusy } from './threadState.js';
 
 const NEW_THREAD_TITLE = 'New chat';
 const PROJECT_CHAT_TITLE = 'Project chat';
-/** How much of a thread's final message the coordinator's completion notice carries. */
-const NOTICE_TEXT_LIMIT = 1500;
+/**
+ * Backstop on a completion notice's final message. Threads are told to keep it to a 2,000-character
+ * summary; this only catches a summary that runs long, and says where the rest is.
+ */
+const NOTICE_TEXT_LIMIT = 4000;
 
 interface ActiveRun {
   runId: number;
@@ -247,11 +250,11 @@ export class ThreadService {
       });
   }
 
-  /** read_thread: the thread's latest conversation messages and errors, each trimmed. */
+  /** read_thread: the thread's latest conversation messages and errors, in full. */
   readThreadFor(ctx: RunContext, threadId: string, lastN: number): Message[] {
     this.requireCoordinator(ctx);
     const thread = this.projectThread(ctx, threadId);
-    return this.store.recentMessages(thread.id, ['text', 'error'], lastN).map((m) => ({ ...m, text: trimText(m.text, 2000) }));
+    return this.store.recentMessages(thread.id, ['text', 'error'], lastN);
   }
 
   readMemoryFor(ctx: RunContext): string {
@@ -481,7 +484,12 @@ export class ThreadService {
       text: `${thread.title} ${said}`,
       meta: { threadId: thread.id, outcome },
     });
-    const body = trimText(finalText.trim(), NOTICE_TEXT_LIMIT) || '(no final message)';
+    const text = finalText.trim();
+    const body = !text
+      ? '(no final message)'
+      : text.length > NOTICE_TEXT_LIMIT
+        ? `${text.slice(0, NOTICE_TEXT_LIMIT)}…\n\n[Cut at ${NOTICE_TEXT_LIMIT.toLocaleString('en-US')} characters. Use read_thread for the full message.]`
+        : text;
     this.deliver(coordinatorId, `[Thread update] "${thread.title}" (thread_id: ${thread.id}) ${said}.\n\nFinal message:\n${body}`);
   }
 

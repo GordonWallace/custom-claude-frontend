@@ -42,7 +42,7 @@ The screen has three panes: projects and their threads on the left, the project 
 - A first project (`data/workspaces/default`) is created on first start. **New** in the sidebar adds a project pointing at any folder, which becomes every session's working directory.
 - **The project chat** talks to the coordinator, a Claude Code session whose job is to delegate. Ask for something like "research A, B and C" and it starts one thread per piece of work, each shown as a card with its live status. It answers quick questions itself.
 - **Threads** run in parallel, up to the concurrency cap (default 3, in Settings). Extra threads show **Queued** until a slot frees up; **Cancel** drops a queued thread's input. The coordinator itself never waits for a slot.
-- When a thread the coordinator started finishes a run, the coordinator gets a short notice with the thread's outcome and its final message (trimmed to about 1,500 characters) and decides what to tell you. You can also message any thread directly, and **New chat** starts a thread of your own that doesn't report back.
+- When a thread the coordinator started finishes a run, the coordinator gets a notice with the thread's outcome and its final message, which threads are told to make a summary of no more than 2,000 characters. If something doesn't fit, the summary tells the coordinator to read the full thread. A summary that runs past 4,000 characters is cut, with a note saying where the rest is. You can also message any thread directly, and **New chat** starts a thread of your own that doesn't report back.
 - Each run shows which mode it ran in. If you switch modes, the next message in an older thread asks once before continuing it in the new mode. Both modes share the same on-disk session, so the conversation carries over.
 - When Claude wants to use a tool that needs approval, the thread shows **Waiting on you** and an approval card (Allow, Allow for this session, Deny). Approvals survive a page reload.
 - **Stop** interrupts the current run. Runs cut off by a server restart are marked stopped; the next message resumes the session.
@@ -105,7 +105,7 @@ Every session gets the app's own MCP server, `POST /mcp` (streamable HTTP, state
 | `start_thread(title, brief)` | Coordinator | Creates a thread, queues the brief as its first turn and returns its id at once |
 | `message_thread(thread_id, text)` | Coordinator | Sends a follow-up into a thread's current run, or queues it |
 | `list_threads()` | Coordinator | Every thread's id, status and the first line of its latest reply |
-| `read_thread(thread_id, last_n)` | Coordinator | A thread's recent messages, trimmed (no tool output) |
+| `read_thread(thread_id, last_n)` | Coordinator | A thread's recent messages in full (no tool output) |
 | `read_memory()` / `write_memory(text)` | Every session | Read or replace `MEMORY.md` in the project workspace |
 
 The coordinator can't use Claude Code's own subagents (`Task`), so delegated work always shows up as threads you can open. The role prompts that tell the coordinator and threads how to behave are in `server/prompts/`; edits apply to the next run without a restart.

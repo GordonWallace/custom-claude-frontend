@@ -79,7 +79,7 @@ function buildServer(threads: ThreadService, ctx: RunContext): McpServer {
     server.registerTool(
       'read_thread',
       {
-        description: "Read a thread's most recent messages (user, assistant and errors; tool output is left out), each trimmed.",
+        description: "Read a thread's most recent messages (user, assistant and errors; tool output is left out), in full.",
         inputSchema: {
           thread_id: z.string(),
           last_n: z.number().int().min(1).max(50).optional().describe('How many messages, default 10.'),
