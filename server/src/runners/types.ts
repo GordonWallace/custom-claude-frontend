@@ -30,6 +30,7 @@ export interface RunConfig {
   appendSystemPrompt?: string; // role prompt + project memory
   mcpServers: McpServerConfig[]; // always includes the app's own MCP server (from M2)
   allowedTools?: string[];
+  disallowedTools?: string[];
   permissionMode: 'default' | 'acceptEdits' | 'plan';
   maxTurns?: number;
   /** Answers tool approvals. Both modes reach it through the same stream-json control protocol. */
@@ -60,7 +61,8 @@ export type RunEvent =
 
 export interface RunHandle {
   events: AsyncIterable<RunEvent>; // normalized stream
-  send(message: string): void; // follow-up user turn while running
+  /** Follow-up user turn while running. False once the run has stopped taking input; queue it for the next run instead. */
+  send(message: string): boolean;
   interrupt(): Promise<void>;
 }
 

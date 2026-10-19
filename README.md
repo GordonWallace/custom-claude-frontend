@@ -2,7 +2,7 @@
 
 A local, single-user, Projects-style web app: a coordinator session starts threads that run in parallel, each backed by Claude Code.
 
-> **Status: milestone M1.** Chat threads run real Claude Code sessions in either mode, with tool approvals in the UI, stop, resume across restarts and the measured plan usage in the header. The coordinator and parallel threads arrive in M2.
+> **Status: milestone M2.** Each project has a project chat with a coordinator that starts threads, which run in parallel up to a concurrency cap and report back when they finish. Threads run real Claude Code sessions in either mode, with tool approvals in the UI, stop, resume across restarts and the measured plan usage in the header. Memory injection and the context meter arrive in M3.
 
 ## Runner modes
 
@@ -37,7 +37,12 @@ pnpm start        # http://127.0.0.1:4317
 
 ## Using it
 
-- A first project (`data/workspaces/default`) and chat are created on first start. **New** in the sidebar adds a project pointing at any folder, which becomes the sessions' working directory.
+The screen has three panes: projects and their threads on the left, the project chat in the centre, and the open thread on the right.
+
+- A first project (`data/workspaces/default`) is created on first start. **New** in the sidebar adds a project pointing at any folder, which becomes every session's working directory.
+- **The project chat** talks to the coordinator, a Claude Code session whose job is to delegate. Ask for something like "research A, B and C" and it starts one thread per piece of work, each shown as a card with its live status. It answers quick questions itself.
+- **Threads** run in parallel, up to the concurrency cap (default 3, in Settings). Extra threads show **Queued** until a slot frees up; **Cancel** drops a queued thread's input. The coordinator itself never waits for a slot.
+- When a thread the coordinator started finishes a run, the coordinator gets a notice with the thread's outcome and its final message, which threads are told to make a summary of no more than 2,000 characters. If something doesn't fit, the summary tells the coordinator to read the full thread. A summary that runs past 4,000 characters is cut, with a note saying where the rest is. You can also message any thread directly, and **New chat** starts a thread of your own that doesn't report back.
 - Each run shows which mode it ran in. If you switch modes, the next message in an older thread asks once before continuing it in the new mode. Both modes share the same on-disk session, so the conversation carries over.
 - When Claude wants to use a tool that needs approval, the thread shows **Waiting on you** and an approval card (Allow, Allow for this session, Deny). Approvals survive a page reload.
 - **Stop** interrupts the current run. Runs cut off by a server restart are marked stopped; the next message resumes the session.
@@ -54,7 +59,7 @@ Copy `config.example.json` to `config.json` (it's git-ignored). Every field is o
 | `port` | `CCF_PORT` | `4317` | Server port (always bound to 127.0.0.1). |
 | `dataDir` | `CCF_DATA_DIR` | `./data` | Where the SQLite database lives. |
 | `claudePath` | `CCF_CLAUDE_PATH` | `claude` | The `claude` CLI used in Subscription mode. |
-| `concurrency` | | `3` | Default cap on threads running at once. |
+| `concurrency` | | `3` | Default cap on threads running at once (the coordinator doesn't count). |
 | `workspacesDir` | | `<dataDir>/workspaces` | Where the default project's workspace is created. |
 | `maxTurns` | | `50` | Cap on agent turns per run, so a runaway session stops on its own. |
 
@@ -91,10 +96,24 @@ Threads:
 
 Live updates (runtime, threads, messages, approvals) stream over the WebSocket at `/api/events`.
 
+### The app's MCP server
+
+Every session gets the app's own MCP server, `POST /mcp` (streamable HTTP, stateless), named `app`. Each run carries a token in its `Authorization` header that tells the server which project and session is calling, and the token stops working when the run ends. Its tools are pre-approved, so they never ask you.
+
+| Tool | Available to | What it does |
+| --- | --- | --- |
+| `start_thread(title, brief)` | Coordinator | Creates a thread, queues the brief as its first turn and returns its id at once |
+| `message_thread(thread_id, text)` | Coordinator | Sends a follow-up into a thread's current run, or queues it |
+| `list_threads()` | Coordinator | Every thread's id, status and the first line of its latest reply |
+| `read_thread(thread_id, last_n)` | Coordinator | A thread's recent messages in full (no tool output) |
+| `read_memory()` / `write_memory(text)` | Every session | Read or replace `MEMORY.md` in the project workspace |
+
+The coordinator can't use Claude Code's own subagents (`Task`), so delegated work always shows up as threads you can open. The role prompts that tell the coordinator and threads how to behave are in `server/prompts/`; edits apply to the next run without a restart.
+
 ## Layout
 
 - `shared/`: TypeScript types shared by server and UI.
-- `server/`: Fastify, `node:sqlite`, the `SessionRunner` interface with one SDK runner and two launch profiles, the thread service, approvals and the SessionStart hook (`server/hooks/post-hook.mjs`) that reports each session's id.
+- `server/`: Fastify, `node:sqlite`, the `SessionRunner` interface with one SDK runner and two launch profiles, the thread service and scheduler, the app's MCP server, approvals, the role prompts and the SessionStart hook (`server/hooks/post-hook.mjs`) that reports each session's id.
 - `web/`: React and Vite.
 
 `pnpm test`, `pnpm typecheck` and `pnpm build` run across all packages.

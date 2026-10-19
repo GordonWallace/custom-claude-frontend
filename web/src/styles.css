@@ -635,3 +635,99 @@ button.link {
     height: auto;
   }
 }
+
+/* ---- M2: three panes, project chat and thread cards ---- */
+.workspace.with-thread {
+  grid-template-columns: 240px minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.thread-pane {
+  border-left: 1px solid var(--border);
+}
+
+.thread-head-row .close {
+  margin-left: auto;
+}
+
+.empty-chat {
+  margin: 8px 0;
+}
+
+.thread-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.thread-card:hover,
+.thread-card.open {
+  border-color: var(--sub);
+}
+
+.thread-card-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-card-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.notice {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.notice-done {
+  color: var(--sub);
+}
+
+.notice-failed {
+  color: var(--error);
+}
+
+.bubble-label {
+  margin-bottom: 4px;
+}
+
+.status-queued {
+  border-style: dashed;
+}
+
+@media (max-width: 1100px) {
+  .workspace.with-thread {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .workspace.with-thread .project-chat {
+    display: none;
+  }
+}
+
+.bubble-user.bubble-coordinator {
+  align-self: stretch;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+@media (max-width: 720px) {
+  .workspace.with-thread {
+    grid-template-columns: 1fr;
+  }
+}

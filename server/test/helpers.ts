@@ -20,6 +20,8 @@ export class FakeRunner implements SessionRunner {
   readonly calls: { kind: 'start' | 'resume'; sessionId?: string; message: string; cfg: RunConfig }[] = [];
   readonly sent: string[] = [];
   interrupted = false;
+  /** False makes send() refuse, like a run whose input stream has ended. */
+  acceptSends = true;
 
   constructor(readonly mode: RunnerMode) {}
 
@@ -46,7 +48,11 @@ export class FakeRunner implements SessionRunner {
   private handle(cfg: RunConfig, message: string): RunHandle {
     return {
       events: this.script(cfg, message),
-      send: (text) => this.sent.push(text),
+      send: (text) => {
+        if (!this.acceptSends) return false;
+        this.sent.push(text);
+        return true;
+      },
       interrupt: async () => {
         this.interrupted = true;
       },

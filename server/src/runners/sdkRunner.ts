@@ -46,6 +46,7 @@ export abstract class SdkRunner implements SessionRunner {
       env: { ...env, CLAUDE_CODE_ENTRYPOINT: 'cli' },
       permissionMode: cfg.permissionMode,
       allowedTools: cfg.allowedTools,
+      disallowedTools: cfg.disallowedTools,
       maxTurns: cfg.maxTurns,
       systemPrompt: cfg.appendSystemPrompt
         ? { type: 'preset', preset: 'claude_code', append: cfg.appendSystemPrompt }
@@ -128,15 +129,20 @@ export class TurnInput implements AsyncIterable<SDKUserMessage> {
   private readonly queue: string[];
   private turnOpen = false;
   private closed = false;
+  /** Set once the stream has ended: the CLI is exiting and won't read another turn. */
+  private ended = false;
   private wake?: () => void;
 
   constructor(first: string) {
     this.queue = [first];
   }
 
-  push(text: string): void {
+  /** Queues a follow-up turn; false if the stream has already ended. */
+  push(text: string): boolean {
+    if (this.closed || this.ended) return false;
     this.queue.push(text);
     this.notify();
+    return true;
   }
 
   turnDone(): void {
@@ -153,13 +159,17 @@ export class TurnInput implements AsyncIterable<SDKUserMessage> {
     while (!this.closed) {
       if (!this.turnOpen) {
         const next = this.queue.shift();
-        if (next === undefined) return;
+        if (next === undefined) {
+          this.ended = true;
+          return;
+        }
         this.turnOpen = true;
         yield { type: 'user', message: { role: 'user', content: next }, parent_tool_use_id: null, session_id: '' };
         continue;
       }
       await new Promise<void>((resolve) => (this.wake = resolve));
     }
+    this.ended = true;
   }
 
   private notify(): void {

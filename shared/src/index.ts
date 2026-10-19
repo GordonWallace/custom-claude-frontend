@@ -59,13 +59,16 @@ export interface RuntimeError {
 /**
  * Thread lifecycle. Allowed moves live in server/src/threadState.ts.
  * awaiting_permission is what the user most needs to see: a tool call is parked on their answer.
+ * queued means input is waiting for a free slot under the concurrency cap.
  */
-export type ThreadStatus = 'idle' | 'running' | 'awaiting_permission' | 'interrupted' | 'failed';
+export type ThreadStatus = 'idle' | 'queued' | 'running' | 'awaiting_permission' | 'interrupted' | 'failed';
 
 export interface Project {
   id: string;
   name: string;
   workspacePath: string;
+  /** The thread that backs the project chat. */
+  coordinatorThreadId: string;
   createdAt: string;
 }
 
@@ -73,6 +76,8 @@ export interface Thread {
   id: string;
   projectId: string;
   kind: 'coordinator' | 'thread';
+  /** Who opened the thread. The coordinator hears when threads it started finish a run. */
+  origin: 'user' | 'coordinator';
   title: string;
   status: ThreadStatus;
   claudeSessionId: string | null;
@@ -84,7 +89,18 @@ export interface Thread {
   updatedAt: string;
 }
 
-export type MessageKind = 'text' | 'tool_use' | 'tool_result' | 'compacted' | 'error' | 'run_started' | 'run_ended';
+export type MessageKind =
+  | 'text'
+  | 'tool_use'
+  | 'tool_result'
+  | 'compacted'
+  | 'error'
+  | 'run_started'
+  | 'run_ended'
+  /** Project chat: the coordinator started a thread (meta.threadId). */
+  | 'thread_started'
+  /** Project chat: a thread's run ended and the coordinator was told (meta.threadId, meta.outcome). */
+  | 'thread_notice';
 
 export interface Message {
   id: number;
