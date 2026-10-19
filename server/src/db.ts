@@ -65,6 +65,18 @@ const migrations: string[] = [
      created_at TEXT NOT NULL
    );
    CREATE INDEX queued_inputs_thread ON queued_inputs (thread_id, id);`,
+  `ALTER TABLE threads ADD COLUMN context_window INTEGER;
+   ALTER TABLE threads ADD COLUMN auto_compact_at INTEGER;
+   ALTER TABLE runs ADD COLUMN notional_cost_usd REAL;
+   CREATE TABLE plan_readings (
+     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+     observed_at        TEXT NOT NULL,
+     run_id             INTEGER REFERENCES runs(id),
+     five_hour          REAL,
+     five_hour_resets   TEXT,
+     seven_day          REAL,
+     seven_day_resets   TEXT
+   );`,
 ];
 
 /** Opens the SQLite file (or ':memory:') and applies any migrations it hasn't seen. */

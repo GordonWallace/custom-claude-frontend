@@ -65,6 +65,19 @@ export async function buildApp({ runtime, threads, bus, webDist, logger }: AppDe
     return reply.status(201).send(threads.createThread(req.params.id, req.body?.title));
   });
 
+  app.get<{ Params: { id: string } }>('/api/projects/:id/memory', async (req) => ({ text: threads.getMemory(req.params.id) }));
+
+  app.put<{ Params: { id: string }; Body: { text?: string } }>('/api/projects/:id/memory', async (req) => {
+    threads.setMemory(req.params.id, req.body?.text as string);
+    return { text: threads.getMemory(req.params.id) };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/projects/:id/usage', async (req) => threads.usage(req.params.id));
+
+  app.post<{ Params: { id: string } }>('/api/projects/:id/coordinator/reset', async (req) =>
+    threads.resetCoordinator(req.params.id),
+  );
+
   app.get<{ Params: { id: string } }>('/api/threads/:id', async (req) => threads.detail(req.params.id));
 
   app.get<{ Params: { id: string } }>('/api/threads/:id/messages', async (req) => threads.messages(req.params.id));

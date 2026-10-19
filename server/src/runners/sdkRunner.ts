@@ -84,6 +84,8 @@ export abstract class SdkRunner implements SessionRunner {
           for (const event of mapSdkMessage(msg, mode)) yield event;
           if (msg.type === 'result') {
             sawResult = true;
+            const context = await contextUsage(q);
+            if (context) yield context;
             input.turnDone();
           }
         }
@@ -106,6 +108,24 @@ export abstract class SdkRunner implements SessionRunner {
         await q.interrupt().catch(() => q.return(undefined));
       },
     };
+  }
+}
+
+/**
+ * Asks the CLI how full the context window is, between turns while it is still listening. Optional:
+ * an older CLI that doesn't answer just leaves the meter on the last turn's token count.
+ */
+async function contextUsage(q: ReturnType<QueryFn>): Promise<RunEvent | undefined> {
+  if (typeof q.getContextUsage !== 'function') return undefined;
+  try {
+    // Bounded, so a CLI that never answers can't hold the run open.
+    const usage = await Promise.race([
+      q.getContextUsage({ detail: 'summary' }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000).unref()),
+    ]);
+    return { type: 'context', usedTokens: usage.totalTokens, maxTokens: usage.maxTokens, autoCompactAt: usage.autoCompactThreshold };
+  } catch {
+    return undefined;
   }
 }
 

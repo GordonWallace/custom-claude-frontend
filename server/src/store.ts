@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { Message, MessageKind, Project, Run, RunnerMode, Thread, ThreadStatus } from '@ccf/shared';
+import type { Message, MessageKind, Project, Run, RunnerMode, Thread, ThreadStatus, UsageWindow } from '@ccf/shared';
 import type { Db } from './db.js';
+import type { PlanReading, RunWeight } from './planUsage.js';
 
 interface ThreadRow {
   id: string;
@@ -12,6 +13,8 @@ interface ThreadRow {
   claude_session_id: string | null;
   last_mode: RunnerMode | null;
   context_tokens: number | null;
+  context_window: number | null;
+  auto_compact_at: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -51,6 +54,8 @@ const toThread = (r: ThreadRow): Thread => ({
   claudeSessionId: r.claude_session_id,
   lastMode: r.last_mode,
   contextTokens: r.context_tokens,
+  contextWindow: r.context_window,
+  autoCompactAt: r.auto_compact_at,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -162,15 +167,20 @@ export class Store {
 
   updateThread(
     id: string,
-    patch: Partial<Pick<Thread, 'status' | 'claudeSessionId' | 'lastMode' | 'contextTokens' | 'title'>>,
+    patch: Partial<
+      Pick<Thread, 'status' | 'claudeSessionId' | 'lastMode' | 'contextTokens' | 'contextWindow' | 'autoCompactAt' | 'title'>
+    >,
   ): Thread {
     const columns: Record<string, string> = {
       status: 'status',
       claudeSessionId: 'claude_session_id',
       lastMode: 'last_mode',
       contextTokens: 'context_tokens',
+      contextWindow: 'context_window',
+      autoCompactAt: 'auto_compact_at',
       title: 'title',
     };
+    // undefined leaves a column alone; null clears it.
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     const sets = entries.map(([k]) => `${columns[k]} = ?`);
     this.db
@@ -211,12 +221,24 @@ export class Store {
     return (this.db.prepare('SELECT * FROM runs WHERE thread_id = ? ORDER BY id').all(threadId) as unknown as RunRow[]).map(toRun);
   }
 
-  endRun(id: number, result: { ok: boolean; inputTokens: number; outputTokens: number; costUsdEstimate?: number }): Run {
+  endRun(
+    id: number,
+    result: { ok: boolean; inputTokens: number; outputTokens: number; costUsdEstimate?: number; notionalCostUsd?: number },
+  ): Run {
     this.db
       .prepare(
-        'UPDATE runs SET ended_at = ?, ok = ?, input_tokens = ?, output_tokens = ?, cost_usd_estimate = ? WHERE id = ?',
+        `UPDATE runs SET ended_at = ?, ok = ?, input_tokens = ?, output_tokens = ?, cost_usd_estimate = ?, notional_cost_usd = ?
+         WHERE id = ?`,
       )
-      .run(now(), result.ok ? 1 : 0, result.inputTokens, result.outputTokens, result.costUsdEstimate ?? null, id);
+      .run(
+        now(),
+        result.ok ? 1 : 0,
+        result.inputTokens,
+        result.outputTokens,
+        result.costUsdEstimate ?? null,
+        result.notionalCostUsd ?? null,
+        id,
+      );
     return this.getRun(id)!;
   }
 
@@ -273,6 +295,50 @@ export class Store {
     return (
       this.db.prepare('SELECT thread_id FROM queued_inputs GROUP BY thread_id ORDER BY MIN(id)').all() as { thread_id: string }[]
     ).map((r) => r.thread_id);
+  }
+
+  addPlanReading(runId: number | null, usage: { fiveHour?: UsageWindow; sevenDay?: UsageWindow }, observedAt = now()): void {
+    this.db
+      .prepare(
+        `INSERT INTO plan_readings (observed_at, run_id, five_hour, five_hour_resets, seven_day, seven_day_resets)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        observedAt,
+        runId,
+        usage.fiveHour?.utilization ?? null,
+        usage.fiveHour?.resetsAt ?? null,
+        usage.sevenDay?.utilization ?? null,
+        usage.sevenDay?.resetsAt ?? null,
+      );
+  }
+
+  planReadingsSince(since: string): PlanReading[] {
+    return (
+      this.db.prepare('SELECT * FROM plan_readings WHERE observed_at >= ? ORDER BY observed_at, id').all(since) as {
+        observed_at: string;
+        five_hour: number | null;
+        five_hour_resets: string | null;
+        seven_day: number | null;
+        seven_day_resets: string | null;
+      }[]
+    ).map((r) => ({
+      at: r.observed_at,
+      fiveHour: r.five_hour === null ? undefined : { utilization: r.five_hour, resetsAt: r.five_hour_resets ?? undefined },
+      sevenDay: r.seven_day === null ? undefined : { utilization: r.seven_day, resetsAt: r.seven_day_resets ?? undefined },
+    }));
+  }
+
+  /** Finished Subscription runs since a time, with what they'd have cost at API prices. */
+  subscriptionRunsSince(since: string): RunWeight[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT r.id, r.thread_id, t.project_id, r.ended_at, r.notional_cost_usd FROM runs r JOIN threads t ON t.id = r.thread_id
+           WHERE r.mode = 'subscription' AND r.ended_at >= ? AND r.notional_cost_usd IS NOT NULL ORDER BY r.ended_at`,
+        )
+        .all(since) as { id: number; thread_id: string; project_id: string; ended_at: string; notional_cost_usd: number }[]
+    ).map((r) => ({ runId: r.id, threadId: r.thread_id, projectId: r.project_id, endedAt: r.ended_at, usd: r.notional_cost_usd }));
   }
 
   apiSpendUsd(): number {

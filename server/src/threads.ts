@@ -6,6 +6,7 @@ import type {
   Message,
   PostMessageBody,
   Project,
+  ProjectUsage,
   RunnerMode,
   Thread,
   ThreadDetail,
@@ -16,6 +17,7 @@ import { HttpError } from './errors.js';
 import type { EventBus } from './events.js';
 import { APP_MCP_SERVER, toolsFor } from './mcpTools.js';
 import { readMemory, writeMemory } from './memory.js';
+import { CALIBRATION_MS, projectUsage } from './planUsage.js';
 import type { PermissionDecision, PermissionRequest, RunConfig, RunHandle, SessionRunner } from './runners/types.js';
 import { modeLabel, type RuntimeLogger, type RuntimeService } from './runtime.js';
 import type { Store } from './store.js';
@@ -28,6 +30,8 @@ const PROJECT_CHAT_TITLE = 'Project chat';
  * summary; this only catches a summary that runs long, and says where the rest is.
  */
 const NOTICE_TEXT_LIMIT = 4000;
+/** How much of MEMORY.md goes into each session's system prompt; read_memory has the rest. */
+const MEMORY_PROMPT_LIMIT = 16_000;
 
 interface ActiveRun {
   runId: number;
@@ -210,6 +214,38 @@ export class ThreadService {
     return true;
   }
 
+  getMemory(projectId: string): string {
+    return readMemory(this.getProject(projectId));
+  }
+
+  setMemory(projectId: string, text: string): void {
+    if (typeof text !== 'string') throw new HttpError(400, 'Send { "text": "..." }.');
+    writeMemory(this.getProject(projectId), text);
+  }
+
+  /** Estimated plan usage per thread and for the project in the current 5-hour and weekly windows. */
+  usage(projectId: string): ProjectUsage {
+    this.getProject(projectId);
+    const since = new Date(Date.now() - CALIBRATION_MS).toISOString();
+    return projectUsage(this.store.planReadingsSince(since), this.store.subscriptionRunsSince(since), projectId);
+  }
+
+  /**
+   * Retires the coordinator's session: its next message starts a fresh one, seeded with the project's
+   * threads (memory is in every session's prompt anyway). For when the project chat has grown too big.
+   */
+  resetCoordinator(projectId: string): Thread {
+    const project = this.getProject(projectId);
+    const coordinator = this.getThread(project.coordinatorThreadId);
+    if (this.active.has(coordinator.id) || coordinator.status === 'queued') {
+      throw new HttpError(409, 'The coordinator is busy. Wait for it to finish or stop it first.');
+    }
+    const thread = this.store.updateThread(coordinator.id, { claudeSessionId: null, contextTokens: null, contextWindow: null, autoCompactAt: null });
+    this.publishThread(thread);
+    this.addMessage({ threadId: thread.id, runId: null, author: 'system', kind: 'session_reset', text: 'Fresh coordinator session', meta: null });
+    return thread;
+  }
+
   // ---- The app's MCP tools (see mcp.ts) ----
 
   runContext(token: string): RunContext | undefined {
@@ -324,8 +360,9 @@ export class ThreadService {
 
   // ---- Runs ----
 
-  private startRun(thread: Thread, runner: SessionRunner, text: string): void {
+  private startRun(thread: Thread, runner: SessionRunner, input: string): void {
     const project = this.store.getProject(thread.projectId)!;
+    const text = this.needsSeed(thread) ? `${this.coordinatorSeed(thread)}\n\n${input}` : input;
     const run = this.store.startRun(thread.id, runner.mode);
     const token = randomUUID();
     this.runTokens.set(token, thread.id);
@@ -348,7 +385,7 @@ export class ThreadService {
       allowedTools: toolsFor(thread.kind).map((name) => `mcp__${APP_MCP_SERVER}__${name}`),
       // The coordinator delegates through threads the user can see, not hidden subagents.
       disallowedTools: thread.kind === 'coordinator' ? ['Task', 'Agent'] : undefined,
-      appendSystemPrompt: rolePrompt(thread.kind),
+      appendSystemPrompt: rolePrompt(thread.kind) + memoryPrompt(project),
       permissionMode: 'default',
       maxTurns: this.opts.maxTurns,
       onPermission: (req) => this.askPermission(thread.id, run.id, req),
@@ -377,7 +414,13 @@ export class ThreadService {
     let errorShown = false;
     let lastText = '';
     let lastError = '';
-    let result = { ok: false, inputTokens: 0, outputTokens: 0, costUsdEstimate: undefined as number | undefined };
+    let result = {
+      ok: false,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsdEstimate: undefined as number | undefined,
+      notionalCostUsd: undefined as number | undefined,
+    };
     const add = (m: Pick<Message, 'author' | 'kind' | 'text' | 'meta'>) => this.addMessage({ threadId, runId, ...m });
 
     try {
@@ -402,14 +445,29 @@ export class ThreadService {
               this.publishThread(this.store.updateThread(threadId, { contextTokens: event.contextTokens }));
             }
             break;
+          case 'context':
+            this.publishThread(
+              this.store.updateThread(threadId, {
+                contextTokens: event.usedTokens,
+                contextWindow: event.maxTokens,
+                autoCompactAt: event.autoCompactAt ?? null,
+              }),
+            );
+            break;
           case 'plan_usage':
             // The plan meter only means something for runs billed to the plan.
             if (mode === 'subscription') {
               this.runtime.recordPlanUsage({ status: event.status, fiveHour: event.fiveHour, sevenDay: event.sevenDay });
+              this.store.addPlanReading(runId, event);
             }
             break;
           case 'compacted':
-            add({ author: 'system', kind: 'compacted', text: 'Context compacted', meta: null });
+            add({
+              author: 'system',
+              kind: 'compacted',
+              text: compactionText(event),
+              meta: { trigger: event.trigger ?? null, preTokens: event.preTokens ?? null, postTokens: event.postTokens ?? null },
+            });
             break;
           case 'error':
             errorShown = true;
@@ -423,6 +481,8 @@ export class ThreadService {
               outputTokens: result.outputTokens + (event.outputTokens ?? 0),
               costUsdEstimate:
                 event.costUsdEstimate === undefined ? result.costUsdEstimate : (result.costUsdEstimate ?? 0) + event.costUsdEstimate,
+              notionalCostUsd:
+                event.notionalCostUsd === undefined ? result.notionalCostUsd : (result.notionalCostUsd ?? 0) + event.notionalCostUsd,
             };
             if (event.ok && event.finalText) lastText = event.finalText;
             if (!event.ok && event.finalText) lastError = event.finalText;
@@ -445,7 +505,7 @@ export class ThreadService {
     threadId: string,
     runId: number,
     token: string,
-    result: { ok: boolean; inputTokens: number; outputTokens: number; costUsdEstimate?: number },
+    result: { ok: boolean; inputTokens: number; outputTokens: number; costUsdEstimate?: number; notionalCostUsd?: number },
     interrupted: boolean,
     finalText: string,
   ): void {
@@ -514,6 +574,31 @@ export class ThreadService {
     this.publishThread(this.store.updateThread(threadId, { claudeSessionId: sessionId }));
   }
 
+  /** A coordinator starting a new session after it has run before (it was reset, or its session was lost). */
+  private needsSeed(thread: Thread): boolean {
+    return thread.kind === 'coordinator' && !thread.claudeSessionId && this.store.listRuns(thread.id).length > 0;
+  }
+
+  private coordinatorSeed(thread: Thread): string {
+    const ctx: RunContext = { threadId: thread.id, projectId: thread.projectId, kind: 'coordinator' };
+    const threads = this.summarizeThreads(ctx)
+      .map((t) => `- ${t.title} (thread_id: ${t.id}) · ${t.status}${t.lastResult ? ` · last reply: ${t.lastResult}` : ''}`)
+      .join('\n');
+    return [
+      "[Fresh coordinator session] The user started a new coordinator session for this project chat, so you don't have the earlier conversation.",
+      'The project memory is in your system prompt. These are the project\'s threads; use read_thread for detail:',
+      threads || '(none yet)',
+      '',
+      "The user's message:",
+    ].join('\n');
+  }
+
+  private getProject(projectId: string): Project {
+    const project = this.store.getProject(projectId);
+    if (!project) throw new HttpError(404, 'No such project.');
+    return project;
+  }
+
   private requireCoordinator(ctx: RunContext): void {
     if (ctx.kind !== 'coordinator') throw new HttpError(403, 'Only the project coordinator can use this tool.');
   }
@@ -557,6 +642,40 @@ export function isThreadBusy(thread: Thread): boolean {
 /** The role prompt for a session, read on each run so edits to prompts/*.md apply without a restart. */
 function rolePrompt(kind: Thread['kind']): string {
   return fs.readFileSync(new URL(`../prompts/${kind}.md`, import.meta.url), 'utf8');
+}
+
+/** MEMORY.md for the system prompt, with how to keep it. */
+function memoryPrompt(project: Project): string {
+  const text = readMemory(project).trim();
+  const body = !text
+    ? '(empty)'
+    : text.length > MEMORY_PROMPT_LIMIT
+      ? `${text.slice(0, MEMORY_PROMPT_LIMIT)}\n…(cut here; read_memory has the rest)`
+      : text;
+  return [
+    '',
+    '',
+    '# Project memory',
+    '',
+    'This is MEMORY.md from the project workspace, shared by every session in the project. When you learn a durable fact or the user makes a decision that other sessions should know, record it with write_memory: read the file first and keep what is still true, because write_memory replaces the whole file. Leave out progress notes and anything only your current task needs.',
+    '',
+    '<project-memory>',
+    body,
+    '</project-memory>',
+  ].join('\n');
+}
+
+function compactionText(event: { trigger?: 'manual' | 'auto'; preTokens?: number; postTokens?: number }): string {
+  const how = event.trigger === 'auto' ? 'automatically' : event.trigger === 'manual' ? 'on request' : '';
+  const sizes =
+    event.preTokens !== undefined
+      ? ` · ${formatTokens(event.preTokens)}${event.postTokens !== undefined ? ` → ${formatTokens(event.postTokens)}` : ''} tokens`
+      : '';
+  return `Context compacted${how ? ` ${how}` : ''}${sizes}`;
+}
+
+function formatTokens(n: number): string {
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 }
 
 function titleFrom(text: string): string {

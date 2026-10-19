@@ -139,6 +139,8 @@ describe('completion notices', () => {
     ctx = await setup({ mode: 'subscription' });
     const runs = gatedRuns(ctx);
     const { project: p, coordinator } = project(ctx);
+    // A session id, so the later run resumes rather than starting a fresh, seeded coordinator.
+    ctx.store.updateThread(p.coordinatorThreadId, { claudeSessionId: 'coord-session' });
     await ctx.app.inject({ method: 'POST', url: `/api/threads/${p.coordinatorThreadId}/messages`, payload: { text: 'plan' } });
     await until(() => runs.started('plan'));
 

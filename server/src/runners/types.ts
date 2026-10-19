@@ -45,7 +45,9 @@ export type RunEvent =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; id: string; isError: boolean; summary: string }
   | { type: 'usage'; inputTokens: number; outputTokens: number; contextTokens?: number }
-  | { type: 'compacted' }
+  | { type: 'compacted'; trigger?: 'manual' | 'auto'; preTokens?: number; postTokens?: number }
+  /** Context window use after a turn, from Claude Code's own accounting (the data behind /context). */
+  | { type: 'context'; usedTokens: number; maxTokens: number; autoCompactAt?: number }
   | {
       type: 'result';
       ok: boolean;

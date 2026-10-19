@@ -85,6 +85,10 @@ export interface Thread {
   lastMode: RunnerMode | null;
   /** Context size reported by the latest assistant turn. */
   contextTokens: number | null;
+  /** The model's context window, from the latest context report. */
+  contextWindow: number | null;
+  /** Context size at which Claude Code compacts automatically, when it reports one. */
+  autoCompactAt: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -100,7 +104,9 @@ export type MessageKind =
   /** Project chat: the coordinator started a thread (meta.threadId). */
   | 'thread_started'
   /** Project chat: a thread's run ended and the coordinator was told (meta.threadId, meta.outcome). */
-  | 'thread_notice';
+  | 'thread_notice'
+  /** Project chat: the user retired the coordinator's session; the next message starts a fresh one. */
+  | 'session_reset';
 
 export interface Message {
   id: number;
@@ -165,6 +171,31 @@ export interface ModeChangedError {
   error: 'mode_changed';
   lastMode: RunnerMode;
   mode: RunnerMode;
+}
+
+/** Estimated share of the plan's usage windows, in percentage points (0 to 100). */
+export interface PlanShare {
+  /** API-price value of the Subscription runs counted, the basis of the estimate. */
+  notionalUsd: number;
+  fiveHour: number | null;
+  sevenDay: number | null;
+}
+
+/** How measured plan usage maps to API-price value for this account, learned from its own history. */
+export interface PlanCalibration {
+  /** Percentage points of the window per notional dollar; null until there is a sample. */
+  pctPerUsd: number | null;
+  /** Meter readings that moved while app runs were the only known activity. */
+  samples: number;
+  /** Rise in the window's meter that no app run accounts for (claude.ai, other clients). */
+  unattributedPct: number;
+}
+
+/** GET /api/projects/:id/usage: estimated plan usage per thread and for the project, in the current windows. */
+export interface ProjectUsage {
+  project: PlanShare;
+  threads: Record<string, PlanShare>;
+  calibration: { fiveHour: PlanCalibration; sevenDay: PlanCalibration };
 }
 
 /** Messages pushed over WS /api/events. */
