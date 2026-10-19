@@ -63,6 +63,7 @@ The screen has three panes: projects and their threads on the left, the project 
 - When a thread the coordinator started finishes a run, the coordinator gets a notice with the thread's outcome and its final message, which threads are told to make a summary of no more than 2,000 characters. If something doesn't fit, the summary tells the coordinator to read the full thread. A summary that runs past 4,000 characters is cut, with a note saying where the rest is. You can also message any thread directly, and **New chat** starts a thread of your own that doesn't report back.
 - Each run shows which mode it ran in. If you switch modes, the next message in an older thread asks once before continuing it in the new mode. Both modes share the same on-disk session, so the conversation carries over.
 - When Claude wants to use a tool that needs approval, the thread shows **Waiting on you** and an approval card (Allow, Allow for this session, Deny). Approvals survive a page reload.
+- Tool calls are hidden by default; turn on **Settings › Display › Show tool calls** to see each command, edit and search with its result (saved per browser). Briefs and follow-ups the coordinator sends a thread, and the updates threads send back to the project chat, show as one line until you click them.
 - **Settings › Tool approvals** decides how much asks. The default, **Auto-approve, except risky commands**, lets edits, reads and ordinary shell commands run on their own and only asks for things like recursive deletes, force pushes, `sudo`, piping a download into a shell or publishing a package (the list is in `server/src/autoApprove.ts`). **Ask every time** and **Approve everything** are the other choices. Questions Claude asks you always reach you.
 - **Project memory** is `MEMORY.md` in the project folder. Every session gets it in its prompt and adds durable facts and decisions to it with the memory tools, so something one thread learns is known by the next. **Memory** in the project chat's header edits it.
 - **The context meter** in each header shows how full the session's context window is, with a tick where Claude Code compacts automatically. A compaction shows in the timeline with the size before and after.
@@ -84,7 +85,7 @@ Every thread runs on a node. This machine is the first one, so a single-machine 
 **Adding a node.** You need Tailscale on both machines (or another private network, see `allowedNetworks`), and remote access turned on here:
 
 1. In `config.json`, set `"remoteAccess": true` and `"publicUrl": "http://<this machine's Tailscale name>:4317"`, then restart. Set a password under **Settings › Remote access**.
-2. Open **Nodes › Add node** and copy the command. It holds a pairing code that works once, for 15 minutes.
+2. Open **Nodes › Add node** and copy the command. It points at `publicUrl`, or the address you opened the app by, or this machine's Tailscale address. It holds a pairing code that works once, for 15 minutes.
 3. Run it on the new machine. It installs git and Node.js 22 with apt if they're missing, downloads the worker to `~/.ccf-node`, installs the Agent SDK (which brings Claude Code for that machine's platform), pairs, and starts the worker as a systemd user service that starts at boot. The node shows up in the Nodes view.
 
 The node runs Claude Code from its own `claude` if one is on its `PATH`, otherwise the copy that came with the Agent SDK. Install whatever build tools your projects need on it yourself.
@@ -113,7 +114,7 @@ The node runs Claude Code from its own `claude` if one is on its `PATH`, otherwi
 - **A thread stopped after many steps.** Runs end after `maxTurns` agent turns (default 50). Send another message to continue.
 - **The API spend turned red.** Estimated API spend passed `spendWarnUsd` (default $10). It's a warning only; nothing is stopped.
 - **Port 4317 is taken.** Set `port` in `config.json` or `CCF_PORT`.
-- **The Add node command says it only works on this machine.** You opened the app as `localhost`. Set `publicUrl` in `config.json` (or open the app by its Tailscale name) so the command points somewhere other machines can reach.
+- **Add node shows setup steps instead of a command.** No other machine can reach this one yet: remote access is off, or the app found no Tailscale address (or address in `allowedNetworks`) on this machine and `publicUrl` isn't set. Do the steps it lists, then click Add node again.
 - **A node shows Offline.** Check the worker on it: `systemctl --user status ccf-node` and `journalctl --user -u ccf-node -f`. It reconnects on its own when the orchestrator is reachable again. If it says the orchestrator refused it, the node was removed: pair it again.
 - **A node can't run Subscription threads.** Save a Claude token under Settings › Credentials, or sign in to `claude` on the node.
 - **A thread's push failed.** The thread shows the git error. Usually the GitHub token is missing, expired, or lacks contents write access to that repo.

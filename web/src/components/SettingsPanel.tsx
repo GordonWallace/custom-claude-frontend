@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ApprovalPolicy, AuthStatus, RunnerMode, RuntimeState, SecretName, SecretStatus } from '@ccf/shared';
 import { getAuth, listSecrets, putRuntime, putSecret, setPassword } from '../api';
+import { usePrefs } from '../prefs';
 import { ModeOptions } from './ModeOptions';
 
 interface Props {
@@ -15,6 +16,7 @@ export function SettingsPanel({ state, onPick, onState, onRefresh, onClose }: Pr
   const [concurrency, setConcurrency] = useState(String(state.concurrency));
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
+  const [prefs, setPrefs] = usePrefs();
 
   const saveConcurrency = async () => {
     setError(undefined);
@@ -75,6 +77,17 @@ export function SettingsPanel({ state, onPick, onState, onRefresh, onClose }: Pr
           </button>
         </div>
         {error && <p className="error">{error}</p>}
+      </section>
+
+      <section>
+        <h3>Display</h3>
+        <label className="approval-option">
+          <input type="checkbox" checked={prefs.showToolCalls} onChange={(e) => setPrefs({ showToolCalls: e.target.checked })} />
+          <span>
+            <strong>Show tool calls</strong>
+            <span className="muted small">Each command, edit and search Claude runs, with its result. Saved in this browser.</span>
+          </span>
+        </label>
       </section>
 
       <section>

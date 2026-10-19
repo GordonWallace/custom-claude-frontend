@@ -901,20 +901,21 @@ export class ThreadService {
     const coordinatorId = this.store.getProject(thread.projectId)?.coordinatorThreadId;
     if (!coordinatorId) return;
     const said = { done: 'finished', stopped: 'was stopped by the user', failed: 'failed' }[outcome];
-    this.addMessage({
-      threadId: coordinatorId,
-      runId: null,
-      author: 'system',
-      kind: 'thread_notice',
-      text: `${thread.title} ${said}`,
-      meta: { threadId: thread.id, outcome },
-    });
     const text = finalText.trim();
     const body = !text
       ? '(no final message)'
       : text.length > NOTICE_TEXT_LIMIT
         ? `${text.slice(0, NOTICE_TEXT_LIMIT)}…\n\n[Cut at ${NOTICE_TEXT_LIMIT.toLocaleString('en-US')} characters. Use read_thread for the full message.]`
         : text;
+    // The project chat shows the notice collapsed; finalText is what the coordinator was told, for click-to-view.
+    this.addMessage({
+      threadId: coordinatorId,
+      runId: null,
+      author: 'system',
+      kind: 'thread_notice',
+      text: `${thread.title} ${said}`,
+      meta: { threadId: thread.id, outcome, finalText: body },
+    });
     this.deliver(coordinatorId, `[Thread update] "${thread.title}" (thread_id: ${thread.id}) ${said}.\n\nFinal message:\n${body}`);
   }
 

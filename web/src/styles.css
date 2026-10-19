@@ -886,3 +886,32 @@ pre.command {
 .approval-option { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
 .approval-option input { margin-top: 3px; }
 .approval-option > span { display: flex; flex-direction: column; gap: 2px; }
+
+/* Collapsed messages between the coordinator and threads */
+.collapse-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.notice .collapse-head { font-size: 12px; }
+.chevron { flex: none; width: 10px; color: var(--muted); font-size: 10px; }
+.collapse-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.collapse-body { margin-top: 6px; white-space: pre-wrap; }
+.notice .collapse-body { white-space: normal; font-size: 13px; color: var(--text); padding: 4px 0 4px 16px; border-left: 2px solid var(--border); margin-left: 4px; }
+.notice.open { align-self: stretch; }
+
+.back-link { display: inline-block; margin-bottom: 10px; font-size: 13px; }
+
+/* A warning that has to be read in full */
+.chip-wrap { white-space: normal; max-width: none; overflow: visible; }
+.pairing-setup ol { padding-left: 20px; display: grid; gap: 6px; margin: 8px 0 12px; }
+.pairing-setup p { margin: 0; }

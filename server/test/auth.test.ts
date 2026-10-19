@@ -53,3 +53,29 @@ describe('remote access', () => {
     expect((await remote('/api/projects', { headers: { cookie } })).statusCode).toBe(401);
   }, 10_000);
 });
+
+describe('the Add node command', () => {
+  const pairing = async (headers: Record<string, string> = {}) =>
+    (await ctx!.app.inject({ method: 'POST', url: '/api/nodes/pairing', headers })).json<{ url: string; setup?: string[]; note?: string }>();
+
+  it('explains how to turn on remote access instead of offering a localhost command', async () => {
+    ctx = await setup({ access: { remoteAccess: false, allowedNetworks: [] } });
+    const p = await pairing();
+    expect(p.setup?.[0]).toContain('"remoteAccess": true');
+  });
+
+  it('uses the address the app was opened by when other machines can use it', async () => {
+    ctx = await setup({ access: { remoteAccess: true, allowedNetworks: [] } });
+    const p = await pairing({ host: 'orchestrator.tail1234.ts.net:4317' });
+    expect(p.url).toBe('http://orchestrator.tail1234.ts.net:4317');
+    expect(p.setup).toBeUndefined();
+  });
+
+  it("picks this machine's Tailscale address over a LAN one in allowedNetworks", async () => {
+    ctx = await setup({ access: { remoteAccess: true, allowedNetworks: ['192.168.1.0/24'] } });
+    const nic = (address: string, internal = false) => ({ address, family: 'IPv4', internal, netmask: '', mac: '', cidr: null }) as never;
+    expect(ctx.access!.ownAddress({ lo: [nic('127.0.0.1', true)], eth0: [nic('192.168.1.5')], tailscale0: [nic(TAILNET)] })).toEqual({ address: TAILNET, tailscale: true });
+    expect(ctx.access!.ownAddress({ eth0: [nic('10.0.0.5'), nic('192.168.1.5')] })).toEqual({ address: '192.168.1.5', tailscale: false });
+    expect(ctx.access!.ownAddress({ eth0: [nic('10.0.0.5')] })).toBeNull();
+  });
+});

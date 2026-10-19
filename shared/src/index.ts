@@ -289,8 +289,10 @@ export interface PairingCode {
   command: string;
   /** The orchestrator URL in the command; nodes must be able to reach it. */
   url: string;
-  /** Set when the URL is a loopback address no other machine can reach. */
-  warning?: string;
+  /** Steps to do on the orchestrator first, when no other machine could reach it yet; the command won't work until then. */
+  setup?: string[];
+  /** Where the URL came from, when the app picked it. */
+  note?: string;
 }
 
 export type SecretName = 'claude_oauth_token' | 'anthropic_api_key' | 'github_token';

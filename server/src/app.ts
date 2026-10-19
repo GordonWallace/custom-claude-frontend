@@ -139,9 +139,18 @@ export async function buildApp({ runtime, threads, bus, nodes, secrets, access, 
   });
 
   app.post('/api/nodes/pairing', async (req) => {
-    const host = req.hostname.replace(/:\d+$/, '');
-    const url = publicUrl?.replace(/\/$/, '') || `${req.protocol}://${host.includes(':') ? `[${host}]` : host}:${port ?? 4317}`;
-    return nodes.createPairingCode(url);
+    const urlFor = (host: string) => `${req.protocol}://${host.includes(':') ? `[${host}]` : host}:${port ?? 4317}`;
+    const host = req.hostname.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+    if (publicUrl) return nodes.createPairingCode(publicUrl.replace(/\/$/, ''));
+    // Opened by an address other machines can use (e.g. its Tailscale name): the node can use it too.
+    if (!isLoopbackHost(host)) return nodes.createPairingCode(urlFor(host));
+    const own = access?.remoteAccess ? access.ownAddress() : null;
+    if (own) {
+      return nodes.createPairingCode(urlFor(own.address), {
+        note: `Uses this machine's ${own.tailscale ? 'Tailscale' : 'network'} address, ${own.address}. To use a name instead, set publicUrl in config.json.`,
+      });
+    }
+    return nodes.createPairingCode(urlFor(host), { setup: pairingSetup(Boolean(access?.remoteAccess)) });
   });
 
   app.post<{ Body: { code?: string; name?: string } }>('/api/nodes/pair', async (req) => nodes.pair(req.body?.code ?? '', req.body?.name ?? 'node'));
@@ -229,4 +238,23 @@ function workerPackageJson(): string {
     // Fall back to the latest.
   }
   return JSON.stringify({ name: 'ccf-node', private: true, type: 'module', dependencies: { '@anthropic-ai/claude-agent-sdk': sdk, zod: '^4.0.0' } }, null, 2);
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === 'localhost' || host === '::1' || host.startsWith('127.');
+}
+
+/** What to do on the orchestrator before a node can reach it, when the app found no address to offer. */
+function pairingSetup(remoteAccess: boolean): string[] {
+  const tailscale =
+    'Install Tailscale on this machine and on the new one (tailscale.com/download), and sign both in to the same account. (A machine on a network listed in allowedNetworks works without it.)';
+  const again = 'Close this and click Add node again. The command will then use an address the new machine can reach.';
+  return remoteAccess
+    ? [tailscale, 'Or set publicUrl in config.json to an address of this machine the new one can reach, and restart the app.', again]
+    : [
+        'Turn on remote access: add "remoteAccess": true to config.json in the app folder (copy config.example.json if there isn\'t one), then restart the app. Until then the app only answers this machine.',
+        tailscale,
+        'Set a password under Settings › Remote access, so other devices can sign in.',
+        again,
+      ];
 }

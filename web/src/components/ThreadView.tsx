@@ -6,6 +6,7 @@ import { Markdown } from './Markdown';
 import { MemoryDialog } from './MemoryDialog';
 import { PlanShareLabel } from './PlanShareLabel';
 import { useConnection, useServerEvents } from '../live';
+import { usePrefs } from '../prefs';
 import { ApprovalCard, ToolInput } from './ApprovalCard';
 import { StatusPill } from './StatusPill';
 
@@ -150,6 +151,7 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
     return map;
   }, [messages]);
   const endedRuns = useMemo(() => new Set(messages.filter((m) => m.kind === 'run_ended').map((m) => m.runId)), [messages]);
+  const [{ showToolCalls }] = usePrefs();
   const shown = new Set<string>();
 
   return (
@@ -157,6 +159,7 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
       {messages.map((m) => {
         switch (m.kind) {
           case 'text':
+            if (m.meta?.from === 'coordinator') return <CoordinatorMessage key={m.id} message={m} />;
             return (
               <div key={m.id} className={`bubble bubble-${m.author}${m.meta?.from === 'coordinator' ? ' bubble-coordinator' : ''}`}>
                 {m.meta?.from === 'coordinator' && <div className="bubble-label muted small">From the coordinator</div>}
@@ -165,6 +168,7 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
               </div>
             );
           case 'tool_use': {
+            if (!showToolCalls) return null;
             const id = String(m.meta?.toolUseId);
             shown.add(id);
             // The thread card below says this better than the raw tool call, and ToolSearch is
@@ -173,6 +177,7 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
             return <ToolCall key={m.id} name={m.text} input={m.meta?.input} result={results.get(id)} ended={m.runId !== null && endedRuns.has(m.runId)} />;
           }
           case 'tool_result':
+            if (!showToolCalls) return null;
             return shown.has(String(m.meta?.toolUseId)) ? null : (
               <div key={m.id} className="muted small">
                 Tool result: {m.text}
@@ -215,20 +220,8 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
               />
             );
           }
-          case 'thread_notice': {
-            const id = String(m.meta?.threadId);
-            const outcome = String(m.meta?.outcome);
-            return (
-              <button
-                key={m.id}
-                type="button"
-                className={`notice notice-${outcome}`}
-                onClick={onOpenThread && (() => onOpenThread(id))}
-              >
-                {outcome === 'done' ? '✓' : outcome === 'failed' ? '✕' : '■'} {m.text}
-              </button>
-            );
-          }
+          case 'thread_notice':
+            return <ThreadNotice key={m.id} message={m} onOpenThread={onOpenThread} />;
           case 'compacted':
             return (
               <div key={m.id} className="run-divider run-divider-compacted" data-testid="compacted">
@@ -264,6 +257,49 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
         }
       })}
     </>
+  );
+}
+
+/** A brief or follow-up the coordinator sent this thread: one line until clicked. */
+function CoordinatorMessage({ message }: { message: Message }) {
+  const [open, setOpen] = useState(false);
+  const preview = message.text.split('\n').find((line) => line.trim()) ?? '';
+  return (
+    <div className={`bubble bubble-user bubble-coordinator${open ? ' open' : ''}`}>
+      <button type="button" className="collapse-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="chevron">{open ? '▾' : '▸'}</span>
+        <span className="muted small">From the coordinator</span>
+        {!open && <span className="collapse-preview">{preview}</span>}
+        {message.meta?.queued === true && <span className="muted small">· sent during the run</span>}
+      </button>
+      {open && <div className="collapse-body">{message.text}</div>}
+    </div>
+  );
+}
+
+/** A thread finished and the coordinator was told: one line until clicked, then what it was told. */
+function ThreadNotice({ message, onOpenThread }: { message: Message; onOpenThread?: (threadId: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const id = String(message.meta?.threadId);
+  const outcome = String(message.meta?.outcome);
+  const finalText = typeof message.meta?.finalText === 'string' ? message.meta.finalText : null;
+  return (
+    <div className={`notice notice-${outcome}${open ? ' open' : ''}`}>
+      <button type="button" className="collapse-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="chevron">{open ? '▾' : '▸'}</span>
+        {outcome === 'done' ? '✓' : outcome === 'failed' ? '✕' : '■'} {message.text}
+      </button>
+      {open && (
+        <div className="collapse-body">
+          {finalText ? <Markdown text={finalText} /> : <p className="muted small">This notice predates saved summaries.</p>}
+          {onOpenThread && (
+            <button type="button" className="link" onClick={() => onOpenThread(id)}>
+              Open thread
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

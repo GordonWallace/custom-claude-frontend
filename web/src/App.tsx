@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AuthStatus, RunnerMode } from '@ccf/shared';
 import { getAuth, logout, subscribeLoginRequired } from './api';
 import { Login } from './components/Login';
@@ -39,6 +39,19 @@ function Workspace({ auth }: { auth: AuthStatus | undefined }) {
   const nodes = useNodes();
 
   const firstLaunch = state !== null && state.mode === null;
+  // Leaving the Nodes view returns to the project and thread that were open before it.
+  const lastHome = useRef('');
+  const lastProjectId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (route.nodes) return;
+    lastHome.current = location.hash;
+    lastProjectId.current = project?.id;
+  }, [route, project?.id]);
+  const goHome = () => {
+    if (lastHome.current) location.hash = lastHome.current;
+    else if (project) navigate(project.id);
+    else location.hash = '';
+  };
 
   return (
     <div className="app">
@@ -47,7 +60,7 @@ function Workspace({ auth }: { auth: AuthStatus | undefined }) {
         <ModeBadge state={state} onClick={() => setSettingsOpen(true)} />
         <span className="spacer" />
         {!connected && <span className="chip chip-error">Server disconnected, reconnecting…</span>}
-        <button type="button" onClick={() => (route.nodes ? project && navigate(project.id) : navigateNodes())} aria-pressed={route.nodes}>
+        <button type="button" onClick={() => (route.nodes ? goHome() : navigateNodes())} aria-pressed={route.nodes}>
           Nodes
           {nodes.some((n) => !n.online) && <span className="chip chip-warn small" title="A node is offline"> {nodes.filter((n) => !n.online).length} offline</span>}
         </button>
@@ -72,7 +85,7 @@ function Workspace({ auth }: { auth: AuthStatus | undefined }) {
             <ModeOptions state={state} onPick={setSwitchTo} />
           </section>
         ) : route.nodes ? (
-          <NodesView nodes={nodes} onOpenThread={(p, t) => navigate(p, t)} />
+          <NodesView nodes={nodes} onOpenThread={(p, t) => navigate(p, t)} onBack={goHome} backLabel={projects.find((p) => p.id === lastProjectId.current)?.name ?? project?.name} />
         ) : (
           <div className={`workspace${threadId ? ' with-thread' : ''}`}>
             <Sidebar

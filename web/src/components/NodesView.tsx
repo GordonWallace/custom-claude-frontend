@@ -6,13 +6,19 @@ import { StatusPill } from './StatusPill';
 interface Props {
   nodes: NodeView[];
   onOpenThread: (projectId: string, threadId: string) => void;
+  onBack: () => void;
+  /** The project the back button returns to. */
+  backLabel?: string;
 }
 
 /** The machines threads run on: their state, resources and threads, and the controls to add, drain or stop them. */
-export function NodesView({ nodes, onOpenThread }: Props) {
+export function NodesView({ nodes, onOpenThread, onBack, backLabel }: Props) {
   const [adding, setAdding] = useState(false);
   return (
     <section className="nodes-view" aria-label="Nodes">
+      <button type="button" className="link back-link" onClick={onBack} data-testid="nodes-back">
+        ← Back to {backLabel ?? 'projects'}
+      </button>
       <header className="nodes-head">
         <h1>Nodes</h1>
         <button type="button" onClick={() => setAdding(true)} data-testid="add-node">
@@ -115,7 +121,7 @@ function NodeCard({ node: n, onOpenThread }: { node: NodeView; onOpenThread: Pro
       )}
 
       {notReady.map((m) => (
-        <p key={m} className="chip chip-warn small">
+        <p key={m} className="chip chip-warn chip-wrap small">
           {MODE_LABEL[m].split(':')[0]} can't run here: {n.ready[m].reason}
         </p>
       ))}
@@ -190,13 +196,31 @@ function AddNodeDialog({ onClose }: { onClose: () => void }) {
     <div className="overlay" role="dialog" aria-modal aria-label="Add node">
       <div className="dialog add-node-dialog">
         <h2>Add a node</h2>
-        <p>
+        <p hidden={Boolean(pairing?.setup)}>
           Run this on the new machine. It needs Linux with Node.js 22.13+ and git (it installs both with apt if they're
           missing), and must reach this server, usually over Tailscale. It installs the worker, pairs, and starts it as a
           service; the node then shows up here.
         </p>
         {error && <p className="error">{error}</p>}
-        {pairing && (
+        {pairing?.setup && (
+          <div className="pairing-setup" data-testid="pairing-setup">
+            <p>
+              <strong>No other machine can reach this one yet.</strong> Do this first:
+            </p>
+            <ol>
+              {pairing.setup.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <div className="dialog-actions">
+              <span className="spacer" />
+              <button type="button" onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+        {pairing && !pairing.setup && (
           <>
             <pre className="command" data-testid="install-command">{pairing.command}</pre>
             <div className="dialog-actions">
@@ -217,7 +241,7 @@ function AddNodeDialog({ onClose }: { onClose: () => void }) {
                 Done
               </button>
             </div>
-            {pairing.warning && <p className="chip chip-warn small">{pairing.warning}</p>}
+            {pairing.note && <p className="muted small">{pairing.note}</p>}
           </>
         )}
       </div>

@@ -104,7 +104,7 @@ export async function setup(opts: { mode?: RunnerMode | null; env?: NodeJS.Proce
   );
   const access = opts.access && new Access(store, settings, opts.access);
   const app = await buildApp({ runtime, threads, bus, nodes, secrets, access });
-  return { app, runtime, threads, runners, settings, store, bus, logs, nodes, secrets, dir };
+  return { app, runtime, threads, runners, settings, store, bus, logs, nodes, secrets, access, dir };
 }
 
 export const LOCAL_INFO: NodeInfoReport = {

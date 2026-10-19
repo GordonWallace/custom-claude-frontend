@@ -124,21 +124,17 @@ export class NodeHub {
 
   // ---- Pairing ----
 
-  createPairingCode(url: string): PairingCode {
+  createPairingCode(url: string, guidance: Pick<PairingCode, 'setup' | 'note'> = {}): PairingCode {
     const code = randomBytes(5).toString('hex').toUpperCase();
     const expiresAt = Date.now() + PAIRING_MS;
     this.pairing.set(code, expiresAt);
     const quoted = `'${url.replace(/'/g, `'\\''`)}'`;
-    const host = new URL(url).hostname;
-    const loopback = host === 'localhost' || host === '::1' || host === '[::1]' || host.startsWith('127.');
     return {
       code,
       expiresAt: new Date(expiresAt).toISOString(),
       url,
       command: `curl -fsSL ${quoted}/api/nodes/install.sh | sh -s -- ${quoted} ${code}`,
-      warning: loopback
-        ? 'This URL only works on the orchestrator machine itself. Open the app by its Tailscale name (or set publicUrl in config.json) so other machines can reach it.'
-        : undefined,
+      ...guidance,
     };
   }
 

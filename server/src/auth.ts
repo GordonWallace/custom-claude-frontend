@@ -1,5 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import net from 'node:net';
+import os from 'node:os';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthStatus } from '@ccf/shared';
 import type { Settings } from './db.js';
@@ -47,6 +48,28 @@ export class Access {
       const type = net.isIPv6(addr) ? 'ipv6' : 'ipv4';
       this.networks.addSubnet(addr, Number(prefix ?? (type === 'ipv6' ? 128 : 32)), type);
     }
+  }
+
+  get remoteAccess(): boolean {
+    return this.opts.remoteAccess;
+  }
+
+  /**
+   * An address of this machine that other machines may reach and this server accepts: its
+   * Tailscale IPv4 address if it has one, else one in allowedNetworks. Null when there's neither.
+   */
+  ownAddress(interfaces = os.networkInterfaces()): { address: string; tailscale: boolean } | null {
+    const tailnet = new net.BlockList();
+    tailnet.addSubnet(TAILSCALE[0][0], TAILSCALE[0][1], 'ipv4');
+    let fallback: string | null = null;
+    for (const list of Object.values(interfaces)) {
+      for (const i of list ?? []) {
+        if (i.internal || i.family !== 'IPv4') continue;
+        if (tailnet.check(i.address, 'ipv4')) return { address: i.address, tailscale: true };
+        if (!fallback && this.isAllowedNetwork(i.address)) fallback = i.address;
+      }
+    }
+    return fallback ? { address: fallback, tailscale: false } : null;
   }
 
   isLoopback(addr: string): boolean {
