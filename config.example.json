@@ -3,5 +3,6 @@
   "port": 4317,
   "dataDir": "./data",
   "claudePath": "claude",
-  "concurrency": 3
+  "concurrency": 3,
+  "maxTurns": 50
 }

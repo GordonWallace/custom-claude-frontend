@@ -65,3 +65,15 @@ describe('recorded-stream contract', () => {
     expect(sub.at(-1)).toMatchObject({ type: 'result', costUsdEstimate: undefined, notionalCostUsd: expect.any(Number) });
   });
 });
+
+describe('API failures', () => {
+  it('reports a synthetic error message once, as an error', () => {
+    const msg = {
+      type: 'assistant',
+      parent_tool_use_id: null,
+      error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: 'Invalid API key' }], usage: { input_tokens: 0, output_tokens: 0 } },
+    } as unknown as SDKMessage;
+    expect(mapSdkMessage(msg, 'api')).toEqual([{ type: 'error', message: 'Invalid API key' }]);
+  });
+});

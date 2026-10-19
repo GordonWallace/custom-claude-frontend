@@ -19,6 +19,11 @@ export function mapSdkMessage(msg: SDKMessage, mode: RunnerMode): RunEvent[] {
     case 'assistant': {
       // Subagent turns stay out of the thread's own transcript.
       if (msg.parent_tool_use_id) return [];
+      // An API failure arrives as a synthetic assistant message whose text is the error: report it once, as an error.
+      if (msg.error) {
+        const text = msg.message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim();
+        return [{ type: 'error', message: text || `Assistant error: ${msg.error}` }];
+      }
       const events: RunEvent[] = [];
       for (const block of msg.message.content) {
         if (block.type === 'text' && block.text.trim()) events.push({ type: 'assistant_text', text: block.text });
@@ -29,7 +34,6 @@ export function mapSdkMessage(msg: SDKMessage, mode: RunnerMode): RunEvent[] {
         const input = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
         events.push({ type: 'usage', inputTokens: input, outputTokens: usage.output_tokens ?? 0, contextTokens: input });
       }
-      if (msg.error) events.push({ type: 'error', message: `Assistant error: ${msg.error}` });
       return events;
     }
 

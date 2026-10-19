@@ -210,6 +210,7 @@ export class ThreadService {
   private async consume(threadId: string, active: ActiveRun): Promise<void> {
     const { runId, mode } = active;
     let seq = 0;
+    let errorShown = false;
     let result = { ok: false, inputTokens: 0, outputTokens: 0, costUsdEstimate: undefined as number | undefined };
     const add = (m: Pick<Message, 'author' | 'kind' | 'text' | 'meta'>) => this.addMessage({ threadId, runId, ...m });
 
@@ -230,7 +231,7 @@ export class ThreadService {
             add({ author: 'system', kind: 'tool_result', text: event.summary, meta: { toolUseId: event.id, isError: event.isError } });
             break;
           case 'usage':
-            if (event.contextTokens !== undefined) {
+            if (event.contextTokens) {
               this.publishThread(this.store.updateThread(threadId, { contextTokens: event.contextTokens }));
             }
             break;
@@ -244,6 +245,7 @@ export class ThreadService {
             add({ author: 'system', kind: 'compacted', text: 'Context compacted', meta: null });
             break;
           case 'error':
+            errorShown = true;
             add({ author: 'system', kind: 'error', text: event.message, meta: null });
             break;
           case 'result':
@@ -254,7 +256,7 @@ export class ThreadService {
               costUsdEstimate:
                 event.costUsdEstimate === undefined ? result.costUsdEstimate : (result.costUsdEstimate ?? 0) + event.costUsdEstimate,
             };
-            if (!event.ok && !active.interrupted && event.finalText) {
+            if (!event.ok && !active.interrupted && event.finalText && !errorShown) {
               add({ author: 'system', kind: 'error', text: event.finalText, meta: null });
             }
             break;

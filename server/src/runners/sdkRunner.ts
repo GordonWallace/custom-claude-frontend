@@ -87,6 +87,8 @@ export abstract class SdkRunner implements SessionRunner {
           }
         }
       } catch (err) {
+        // The SDK also throws for an error result it has already delivered; that one is reported.
+        if (sawResult) return;
         const detail = stderr.join('').trim().split('\n').slice(-5).join('\n');
         yield { type: 'error', message: [(err as Error).message, detail].filter(Boolean).join('\n') };
         if (!sawResult) yield { type: 'result', ok: false, finalText: (err as Error).message };

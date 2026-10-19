@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { RunnerMode } from '@ccf/shared';
 import { ModeBadge } from './components/ModeBadge';
 import { ModeOptions } from './components/ModeOptions';
 import { SettingsPanel } from './components/SettingsPanel';
+import { Sidebar } from './components/Sidebar';
 import { SwitchDialog } from './components/SwitchDialog';
+import { ThreadView } from './components/ThreadView';
 import { useRuntime } from './useRuntime';
 
 export function App() {
   const { state, connected, setState, refresh } = useRuntime();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [switchTo, setSwitchTo] = useState<RunnerMode>();
+  const [threadId, setThreadId] = useSelectedThread();
 
   const firstLaunch = state !== null && state.mode === null;
 
@@ -36,10 +39,10 @@ export function App() {
             <ModeOptions state={state} onPick={setSwitchTo} />
           </section>
         ) : (
-          <section className="empty">
-            <h1>Projects</h1>
-            <p className="muted">Projects, the coordinator chat and threads arrive in the next milestones.</p>
-          </section>
+          <div className="workspace">
+            <Sidebar selectedThreadId={threadId} onSelect={setThreadId} />
+            {threadId ? <ThreadView threadId={threadId} /> : <section className="thread-view muted">Pick a thread.</section>}
+          </div>
         )}
       </main>
 
@@ -66,4 +69,16 @@ export function App() {
       )}
     </div>
   );
+}
+
+/** The open thread, kept in the URL hash so a reload stays on it. */
+function useSelectedThread(): [string | undefined, (id: string) => void] {
+  const read = () => /^#\/thread\/(.+)$/.exec(location.hash)?.[1];
+  const [id, setId] = useState(read);
+  useEffect(() => {
+    const onHash = () => setId(read());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  return [id, (next) => (location.hash = `#/thread/${next}`)];
 }
