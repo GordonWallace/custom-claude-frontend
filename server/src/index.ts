@@ -39,7 +39,7 @@ const runtime = new RuntimeService(
   runners,
   settings,
   bus,
-  { mode: config.mode, concurrency: config.concurrency, spendWarnUsd: config.spendWarnUsd },
+  { mode: config.mode, concurrency: config.concurrency, spendWarnUsd: config.spendWarnUsd, approvals: config.approvals },
   process.env,
   log,
   () => store.apiSpendUsd(),

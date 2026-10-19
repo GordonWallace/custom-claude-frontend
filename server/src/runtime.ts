@@ -1,4 +1,4 @@
-import type { PlanUsage, RunnerHealth, RunnerMode, RuntimeState } from '@ccf/shared';
+import type { ApprovalPolicy, PlanUsage, RunnerHealth, RunnerMode, RuntimeState } from '@ccf/shared';
 import { isRunnerMode } from './config.js';
 import { HttpError } from './errors.js';
 import type { Settings } from './db.js';
@@ -31,7 +31,7 @@ export class RuntimeService {
     private readonly runners: Record<RunnerMode, SessionRunner>,
     private readonly settings: Settings,
     private readonly bus: EventBus,
-    private readonly defaults: { mode: RunnerMode | null; concurrency: number; spendWarnUsd?: number | null },
+    private readonly defaults: { mode: RunnerMode | null; concurrency: number; spendWarnUsd?: number | null; approvals?: ApprovalPolicy },
     private readonly env: NodeJS.ProcessEnv,
     private readonly log: RuntimeLogger,
     private readonly apiSpend: () => number = () => 0,
@@ -45,6 +45,18 @@ export class RuntimeService {
   get concurrency(): number {
     const stored = Number(this.settings.get('runtime.concurrency'));
     return Number.isInteger(stored) && stored > 0 ? stored : this.defaults.concurrency;
+  }
+
+  get approvals(): ApprovalPolicy {
+    const stored = this.settings.get('runtime.approvals');
+    return isApprovalPolicy(stored) ? stored : (this.defaults.approvals ?? 'ask');
+  }
+
+  async setApprovals(policy: ApprovalPolicy): Promise<RuntimeState> {
+    if (!isApprovalPolicy(policy)) throw new RuntimeError(400, 'approvals must be "ask", "auto" or "all".');
+    this.settings.set('runtime.approvals', policy);
+    this.log.info(`Tool approvals set to ${policy}`);
+    return this.publish();
   }
 
   /** The runner new runs should use. Throws 409 if no mode is chosen or its runner isn't usable. */
@@ -92,6 +104,7 @@ export class RuntimeService {
       concurrency: this.concurrency,
       spendUsdEstimate: this.apiSpend(),
       spendWarnUsd: this.defaults.spendWarnUsd ?? null,
+      approvals: this.approvals,
       apiKeyIgnored: mode === 'subscription' && Boolean(this.env.ANTHROPIC_API_KEY?.trim()),
       planUsage: this.planUsage(),
     };
@@ -164,4 +177,8 @@ export class RuntimeService {
 
 export function modeLabel(mode: RunnerMode): string {
   return mode === 'api' ? 'API mode' : 'Subscription mode';
+}
+
+export function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
+  return value === 'ask' || value === 'auto' || value === 'all';
 }

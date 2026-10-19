@@ -3,7 +3,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { LogController, type FastifyBaseLogger, type FastifyInstance } from 'fastify';
-import type { ApprovalDecision, NodeUpdate, PostMessageBody, RuntimeUpdate, ServerEvent } from '@ccf/shared';
+import type { ApprovalDecision, ApprovalPolicy, NodeUpdate, PostMessageBody, RuntimeUpdate, ServerEvent } from '@ccf/shared';
 import type { WebSocket } from 'ws';
 import type { Access } from './auth.js';
 import { isRunnerMode, repoRoot } from './config.js';
@@ -55,14 +55,15 @@ export async function buildApp({ runtime, threads, bus, nodes, secrets, access, 
 
   app.put<{ Body: RuntimeUpdate }>('/api/runtime', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    if (body.mode === undefined && body.concurrency === undefined) {
-      return reply.status(400).send({ error: 'Send { "mode": "api" | "subscription" } and/or { "concurrency": n }.' });
+    if (body.mode === undefined && body.concurrency === undefined && body.approvals === undefined) {
+      return reply.status(400).send({ error: 'Send { "mode": "api" | "subscription" }, { "concurrency": n } and/or { "approvals": "ask" | "auto" | "all" }.' });
     }
     if (body.mode !== undefined && !isRunnerMode(body.mode)) {
       return reply.status(400).send({ error: `Unknown mode ${JSON.stringify(body.mode)}: use "api" or "subscription".` });
     }
     let state = undefined;
     if (body.concurrency !== undefined) state = await runtime.setConcurrency(Number(body.concurrency));
+    if (body.approvals !== undefined) state = await runtime.setApprovals(body.approvals as ApprovalPolicy);
     if (body.mode !== undefined) state = await runtime.setMode(body.mode);
     return state;
   });

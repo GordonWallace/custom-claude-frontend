@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { RunnerMode } from '@ccf/shared';
+import type { ApprovalPolicy, RunnerMode } from '@ccf/shared';
 
 export interface AppConfig {
   /** Default mode; a mode chosen through the API or UI is stored in the settings table and wins over this. */
@@ -17,6 +17,8 @@ export interface AppConfig {
   maxTurns: number;
   /** API-mode spend at which the header badge turns into a warning; 0 turns the warning off. */
   spendWarnUsd: number | null;
+  /** Default tool-approval policy; one chosen in the UI or through PUT /api/runtime wins. */
+  approvals: ApprovalPolicy;
   /** Listen on every interface (accepting only Tailscale and allowedNetworks) with a login, for other devices and nodes (M5). */
   remoteAccess: boolean;
   allowedNetworks: string[];
@@ -61,6 +63,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     workspacesDir: path.resolve(repoRoot, String(fromFile.workspacesDir ?? path.join(dataDir, 'workspaces'))),
     maxTurns: Number(fromFile.maxTurns ?? 50),
     spendWarnUsd: Number(fromFile.spendWarnUsd ?? 10) || null,
+    approvals: fromFile.approvals === 'ask' || fromFile.approvals === 'all' ? fromFile.approvals : 'auto',
     remoteAccess,
     allowedNetworks: Array.isArray(fromFile.allowedNetworks) ? fromFile.allowedNetworks.map(String) : [],
     publicUrl: (env.CCF_PUBLIC_URL ?? (fromFile.publicUrl as string | undefined)) || null,

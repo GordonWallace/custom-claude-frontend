@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AuthStatus, RunnerMode, RuntimeState, SecretName, SecretStatus } from '@ccf/shared';
+import type { ApprovalPolicy, AuthStatus, RunnerMode, RuntimeState, SecretName, SecretStatus } from '@ccf/shared';
 import { getAuth, listSecrets, putRuntime, putSecret, setPassword } from '../api';
 import { ModeOptions } from './ModeOptions';
 
@@ -20,6 +20,15 @@ export function SettingsPanel({ state, onPick, onState, onRefresh, onClose }: Pr
     setError(undefined);
     try {
       onState(await putRuntime({ concurrency: Number(concurrency) }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const setApprovals = async (approvals: ApprovalPolicy) => {
+    setError(undefined);
+    try {
+      onState(await putRuntime({ approvals }));
     } catch (err) {
       setError((err as Error).message);
     }
@@ -68,6 +77,27 @@ export function SettingsPanel({ state, onPick, onState, onRefresh, onClose }: Pr
         {error && <p className="error">{error}</p>}
       </section>
 
+      <section>
+        <h3>Tool approvals</h3>
+        <p className="muted">Applies to every thread and project chat, on every node, from the next tool call.</p>
+        <div className="approval-options" role="radiogroup" aria-label="Tool approvals">
+          {APPROVAL_OPTIONS.map((o) => (
+            <label key={o.value} className="approval-option">
+              <input
+                type="radio"
+                name="approvals"
+                checked={state.approvals === o.value}
+                onChange={() => void setApprovals(o.value)}
+              />
+              <span>
+                <strong>{o.label}</strong>
+                <span className="muted small">{o.help}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </section>
+
       <Credentials />
       <RemoteAccess />
 
@@ -75,6 +105,16 @@ export function SettingsPanel({ state, onPick, onState, onRefresh, onClose }: Pr
     </aside>
   );
 }
+
+const APPROVAL_OPTIONS: { value: ApprovalPolicy; label: string; help: string }[] = [
+  { value: 'ask', label: 'Ask every time', help: 'Every tool call Claude Code would ask about waits for you.' },
+  {
+    value: 'auto',
+    label: 'Auto-approve, except risky commands',
+    help: 'Edits, reads, web fetches and shell commands run on their own. Recursive deletes, force pushes, sudo, piping a download into a shell, publishing packages and similar still ask.',
+  },
+  { value: 'all', label: 'Approve everything', help: 'Nothing asks. Only use this where a mistake is cheap to undo.' },
+];
 
 const SECRETS: Record<SecretName, { label: string; help: string; placeholder: string }> = {
   claude_oauth_token: {

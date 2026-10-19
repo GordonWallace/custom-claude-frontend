@@ -880,3 +880,9 @@ pre.command {
 .secret-row .label { grid-column: 1 / -1; display: flex; gap: 8px; align-items: baseline; }
 .secret-row .ok { color: var(--sub); font-weight: 600; }
 .secret-row input { width: 100%; min-width: 0; }
+
+/* Tool approvals */
+.approval-options { display: flex; flex-direction: column; gap: 8px; }
+.approval-option { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.approval-option input { margin-top: 3px; }
+.approval-option > span { display: flex; flex-direction: column; gap: 2px; }

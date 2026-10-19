@@ -63,6 +63,7 @@ The screen has three panes: projects and their threads on the left, the project 
 - When a thread the coordinator started finishes a run, the coordinator gets a notice with the thread's outcome and its final message, which threads are told to make a summary of no more than 2,000 characters. If something doesn't fit, the summary tells the coordinator to read the full thread. A summary that runs past 4,000 characters is cut, with a note saying where the rest is. You can also message any thread directly, and **New chat** starts a thread of your own that doesn't report back.
 - Each run shows which mode it ran in. If you switch modes, the next message in an older thread asks once before continuing it in the new mode. Both modes share the same on-disk session, so the conversation carries over.
 - When Claude wants to use a tool that needs approval, the thread shows **Waiting on you** and an approval card (Allow, Allow for this session, Deny). Approvals survive a page reload.
+- **Settings › Tool approvals** decides how much asks. The default, **Auto-approve, except risky commands**, lets edits, reads and ordinary shell commands run on their own and only asks for things like recursive deletes, force pushes, `sudo`, piping a download into a shell or publishing a package (the list is in `server/src/autoApprove.ts`). **Ask every time** and **Approve everything** are the other choices. Questions Claude asks you always reach you.
 - **Project memory** is `MEMORY.md` in the project folder. Every session gets it in its prompt and adds durable facts and decisions to it with the memory tools, so something one thread learns is known by the next. **Memory** in the project chat's header edits it.
 - **The context meter** in each header shows how full the session's context window is, with a tick where Claude Code compacts automatically. A compaction shows in the timeline with the size before and after.
 - **Fresh session** in the project chat's header retires the coordinator's session when the chat has grown large. Its next reply starts a new session that knows the memory and the list of threads but not the earlier conversation.
@@ -133,6 +134,7 @@ Copy `config.example.json` to `config.json` (it's git-ignored). Every field is o
 | `workspacesDir` | | `<dataDir>/workspaces` | Where the default project's workspace is created. |
 | `maxTurns` | | `50` | Cap on agent turns per run, so a runaway session stops on its own. |
 | `spendWarnUsd` | | `10` | Estimated API-mode spend at which the badge turns red; `0` turns the warning off. |
+| `approvals` | | `"auto"` | Default tool-approval policy: `"ask"`, `"auto"` (everything except risky commands) or `"all"`. A choice made in Settings wins. |
 | `remoteAccess` | `CCF_REMOTE_ACCESS=1` | `false` | Listen on every interface for other devices and nodes, with a password (see Nodes). |
 | `publicUrl` | `CCF_PUBLIC_URL` | none | This server's URL as other machines reach it, used in the Add node command. |
 | `allowedNetworks` | | `[]` | Extra networks to accept besides Tailscale, in CIDR form, e.g. `["192.168.1.0/24"]`. |
@@ -153,6 +155,10 @@ curl -X PUT http://127.0.0.1:4317/api/runtime \
 # Change the concurrency cap
 curl -X PUT http://127.0.0.1:4317/api/runtime \
   -H 'content-type: application/json' -d '{"concurrency":2}'
+
+# Change the tool-approval policy: "ask", "auto" or "all"
+curl -X PUT http://127.0.0.1:4317/api/runtime \
+  -H 'content-type: application/json' -d '{"approvals":"auto"}'
 ```
 
 A switch re-checks the target runner first. If it isn't usable (no API key, CLI missing, too old or signed out), the server answers `409` with the reason in `reason`, and the mode stays as it was. `GET /api/runtime?refresh` skips the 15-second health cache.

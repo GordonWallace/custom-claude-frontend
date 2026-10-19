@@ -28,6 +28,12 @@ export interface PlanUsage {
   observedAt: string;
 }
 
+/**
+ * How tool calls are approved: ask for every one, approve everything except risky shell commands
+ * (recursive deletes, force pushes, sudo, piping downloads into a shell…), or approve everything.
+ */
+export type ApprovalPolicy = 'ask' | 'auto' | 'all';
+
 export interface RuntimeState {
   /** Null until the user picks a mode, when neither config.json nor CCF_MODE sets a default. */
   mode: RunnerMode | null;
@@ -40,6 +46,7 @@ export interface RuntimeState {
   spendWarnUsd: number | null;
   /** True when ANTHROPIC_API_KEY is set but Subscription mode is active, so the key is ignored for runs. */
   apiKeyIgnored: boolean;
+  approvals: ApprovalPolicy;
   /** Latest measured plan usage from Subscription-mode runs; null until one has reported it. */
   planUsage: PlanUsage | null;
 }
@@ -47,6 +54,7 @@ export interface RuntimeState {
 export interface RuntimeUpdate {
   mode?: RunnerMode;
   concurrency?: number;
+  approvals?: ApprovalPolicy;
 }
 
 export interface RuntimeError {

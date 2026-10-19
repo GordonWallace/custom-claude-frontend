@@ -15,6 +15,7 @@ import type {
   ThreadStatus,
 } from '@ccf/shared';
 import type { ApprovalStore } from './approvals.js';
+import { autoApproval } from './autoApprove.js';
 import { HttpError } from './errors.js';
 import type { EventBus } from './events.js';
 import { APP_MCP_SERVER, toolsFor } from './mcpTools.js';
@@ -918,6 +919,9 @@ export class ThreadService {
   }
 
   private async askPermission(threadId: string, runId: number, req: PermissionRequest): Promise<PermissionDecision> {
+    const auto = autoApproval(this.runtime.approvals, req);
+    if (auto.allow) return { behavior: 'allow' };
+    if (auto.reason) req = { ...req, decisionReason: [auto.reason, req.decisionReason].filter(Boolean).join(' ') };
     this.setStatus(threadId, 'awaiting_permission');
     const decision = await this.approvals.request(threadId, runId, req);
     const thread = this.store.getThread(threadId);
