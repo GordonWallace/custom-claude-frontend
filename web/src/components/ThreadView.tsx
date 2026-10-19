@@ -149,6 +149,7 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
     for (const m of messages) if (m.kind === 'tool_result') map.set(String(m.meta?.toolUseId), m);
     return map;
   }, [messages]);
+  const endedRuns = useMemo(() => new Set(messages.filter((m) => m.kind === 'run_ended').map((m) => m.runId)), [messages]);
   const shown = new Set<string>();
 
   return (
@@ -169,7 +170,7 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
             // The thread card below says this better than the raw tool call, and ToolSearch is
             // Claude Code loading the app's tools, not work the user asked for.
             if (m.text === 'mcp__app__start_thread' || m.text === 'ToolSearch') return null;
-            return <ToolCall key={m.id} name={m.text} input={m.meta?.input} result={results.get(id)} />;
+            return <ToolCall key={m.id} name={m.text} input={m.meta?.input} result={results.get(id)} ended={m.runId !== null && endedRuns.has(m.runId)} />;
           }
           case 'tool_result':
             return shown.has(String(m.meta?.toolUseId)) ? null : (
@@ -278,13 +279,13 @@ function ThreadCard({ title, thread, open, onOpen }: { title: string; thread?: T
   );
 }
 
-function ToolCall({ name, input, result }: { name: string; input: unknown; result?: Message }) {
+function ToolCall({ name, input, result, ended }: { name: string; input: unknown; result?: Message; ended: boolean }) {
   const isError = result?.meta?.isError === true;
   return (
     <details className={`tool${isError ? ' tool-error' : ''}`}>
       <summary>
         <span className="tool-name">{name}</span> <span className="muted small">{toolSummary(name, input)}</span>
-        {!result && <span className="muted small"> · running</span>}
+        {!result && <span className="muted small"> · {ended ? 'no result' : 'running'}</span>}
         {isError && <span className="error small"> · error</span>}
       </summary>
       <ToolInput toolName={name} input={input} />

@@ -266,6 +266,8 @@ describe('handoff', () => {
     const resumed = ctx.runners.subscription.calls[0];
     expect(resumed).toMatchObject({ kind: 'resume', sessionId: 'sess-h' });
     expect(resumed.message).toContain("pi-1 went offline mid-turn, so anything it hadn't committed and pushed may be lost");
+    // The interrupted turn never reached the stored transcript, so its request is sent again.
+    expect(resumed.message).toMatch(/This was the request:\n\nmore$/);
     expect(fs.existsSync(path.join(resumed.cfg.cwd, 'a.txt'))).toBe(true);
     expect(ctx.store.listMessages(t.id).some((m) => m.text === 'Cut off: pi-1 went offline')).toBe(true);
   });

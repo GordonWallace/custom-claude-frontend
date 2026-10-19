@@ -879,3 +879,4 @@ pre.command {
 .secret-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; margin-bottom: 10px; }
 .secret-row .label { grid-column: 1 / -1; display: flex; gap: 8px; align-items: baseline; }
 .secret-row .ok { color: var(--sub); font-weight: 600; }
+.secret-row input { width: 100%; min-width: 0; }

@@ -86,7 +86,13 @@ const app = await buildApp({
   logger,
 });
 await runtime.logStartup();
-await app.listen({ host: config.host, port: config.port });
+try {
+  await app.listen({ host: config.host, port: config.port });
+} catch (err) {
+  // A machine without IPv6 can't listen on '::'; every IPv4 interface does the same job.
+  if ((err as NodeJS.ErrnoException).code !== 'EAFNOSUPPORT' || config.host !== '::') throw err;
+  await app.listen({ host: '0.0.0.0', port: config.port });
+}
 if (config.remoteAccess) {
   log.info(
     `Remote access is on: listening on every interface for Tailscale${config.allowedNetworks.length ? ` and ${config.allowedNetworks.join(', ')}` : ''}.` +

@@ -104,12 +104,16 @@ export class NodeHub {
     agent.attach(pair.node);
     const conn = this.register(row.id, pair.orchestrator, info, new Set());
     this.store.updateNode(row.id, { info_json: JSON.stringify(info), last_seen_at: new Date().toISOString(), resources_json: JSON.stringify(agent.resources()) });
-    // The local node never misses a heartbeat; refresh its resources on the same cadence as a remote one.
+    // Checks remote heartbeats often, so a silent node shows offline soon after 30 seconds. The local
+    // node never misses one; its resources refresh on a remote node's heartbeat cadence.
+    let tick = 0;
     this.timer = setInterval(() => {
       conn.lastHeartbeat = Date.now();
-      this.store.updateNode(row.id, { last_seen_at: new Date().toISOString(), resources_json: JSON.stringify(agent.resources()) });
+      if (tick++ % 5 === 0) {
+        this.store.updateNode(row.id, { last_seen_at: new Date().toISOString(), resources_json: JSON.stringify(agent.resources()) });
+      }
       this.checkHeartbeats();
-    }, 5_000);
+    }, 2_000);
     this.timer.unref();
   }
 

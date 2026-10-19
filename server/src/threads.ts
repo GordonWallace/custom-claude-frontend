@@ -52,6 +52,8 @@ interface ActiveRun {
   lost: boolean;
   /** Its node is being drained (hand off after this run) or stopped (interrupted; hand off and continue). */
   moveAfter: 'drain' | 'stop' | null;
+  /** Input whose turn hasn't finished yet: if the node is lost, the transcript won't have it, so it is sent again. */
+  unfinished: string[];
 }
 
 /** Who is calling the app's MCP server: resolved from the per-run token in its request header. */
@@ -368,7 +370,10 @@ export class ThreadService {
    */
   private deliver(threadId: string, text: string): 'sent' | 'queued' {
     const active = this.active.get(threadId);
-    if (active?.handle.send(text)) return 'sent';
+    if (active?.handle.send(text)) {
+      active.unfinished.push(text);
+      return 'sent';
+    }
     this.requeue(threadId, text);
     return 'queued';
   }
@@ -582,7 +587,18 @@ export class ThreadService {
       untrack();
       return;
     }
-    const active: ActiveRun = { runId: run.id, mode, kind: thread.kind, handle, token, interrupted: false, nodeId, lost: false, moveAfter: null };
+    const active: ActiveRun = {
+      runId: run.id,
+      mode,
+      kind: thread.kind,
+      handle,
+      token,
+      interrupted: false,
+      nodeId,
+      lost: false,
+      moveAfter: null,
+      unfinished: [input],
+    };
     this.active.set(thread.id, active);
     this.publishNodes();
     void this.consume(thread.id, active).finally(untrack);
@@ -655,6 +671,8 @@ export class ThreadService {
             add({ author: 'system', kind: 'error', text: event.message, meta: null });
             break;
           case 'result':
+            // A lost node's runs end with a made-up result; that turn didn't finish.
+            if (!active.lost) active.unfinished.shift();
             result = {
               ok: event.ok,
               inputTokens: result.inputTokens + (event.inputTokens ?? 0),
@@ -697,7 +715,15 @@ export class ThreadService {
     this.runTokens.delete(token);
     this.approvals.cancelRun(runId);
     const run = this.store.endRun(runId, result);
-    if (cutOff) this.store.enqueueInput(threadId, 'Continue where you left off.');
+    if (moving === 'lost' && active!.unfinished.length > 0) {
+      // Only finished turns reached the orchestrator's transcript, so ask again for what was in progress.
+      this.store.enqueueInput(
+        threadId,
+        `Your last turn was cut off before it finished, and anything you did in it may be lost. This was the request:\n\n${active!.unfinished.join('\n\n')}`,
+      );
+    } else if (cutOff) {
+      this.store.enqueueInput(threadId, 'Continue where you left off.');
+    }
     const outcome = interrupted ? 'stopped' : result.ok ? 'done' : 'failed';
     const nodeName = active ? (this.store.getNode(active.nodeId)?.name ?? 'its node') : '';
     this.addMessage({

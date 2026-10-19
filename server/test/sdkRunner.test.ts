@@ -47,6 +47,29 @@ describe('TurnInput', () => {
     input.turnDone();
     expect((await it.next()).done).toBe(true);
   });
+
+  it('stays open while background tasks run, for the turn the CLI starts when they finish', async () => {
+    const input = new TurnInput('first');
+    const it = input[Symbol.asyncIterator]();
+    await it.next();
+    input.setBackground(1);
+    input.turnDone();
+    const pending = it.next();
+    let settled = false;
+    void pending.then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+    expect(input.push('still listening')).toBe(true);
+    expect((await pending).value?.message.content).toBe('still listening');
+
+    // The task finishes and the CLI reports it in a turn of its own; then the stream can end.
+    input.setBackground(0);
+    input.turnDone();
+    const after = it.next();
+    input.cliTurnStarted();
+    input.turnDone();
+    expect((await after).done).toBe(true);
+  });
 });
 
 describe('SdkRunner launch profiles', () => {
