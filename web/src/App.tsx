@@ -109,12 +109,13 @@ function Workspace({ auth }: { auth: AuthStatus | undefined }) {
                 onOpenThread={(id) => navigate(project.id, id)}
                 usage={usage}
                 nodes={nodes}
+                runtime={state}
               />
             ) : (
               <section className="thread-view muted">Loading…</section>
             )}
             {project && threadId && (
-              <ThreadView key={threadId} threadId={threadId} threads={threads} onClose={() => navigate(project.id)} usage={usage} nodes={nodes} />
+              <ThreadView key={threadId} threadId={threadId} threads={threads} onClose={() => navigate(project.id)} usage={usage} nodes={nodes} runtime={state} />
             )}
           </div>
         )}

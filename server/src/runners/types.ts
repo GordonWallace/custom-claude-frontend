@@ -1,4 +1,4 @@
-import type { RunnerHealth, RunnerMode, UsageWindow } from '@ccf/shared';
+import type { ModelOption, RunnerHealth, RunnerMode, ThinkingLevel, UsageWindow } from '@ccf/shared';
 
 export type { RunnerHealth, RunnerMode };
 
@@ -27,6 +27,8 @@ export type PermissionDecision =
 export interface RunConfig {
   cwd: string; // project workspace directory
   model?: string;
+  /** Off turns extended thinking off; a level sets the effort. Undefined leaves both to Claude Code. */
+  thinking?: ThinkingLevel;
   appendSystemPrompt?: string; // role prompt + project memory
   mcpServers: McpServerConfig[]; // always includes the app's own MCP server (from M2)
   allowedTools?: string[];
@@ -60,6 +62,8 @@ export type RunEvent =
       inputTokens?: number;
       outputTokens?: number;
     }
+  /** The models this Claude Code offers, asked for once per run. */
+  | { type: 'models'; models: ModelOption[] }
   | { type: 'plan_usage'; status?: string; fiveHour?: UsageWindow; sevenDay?: UsageWindow }
   | { type: 'error'; message: string };
 

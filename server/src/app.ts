@@ -55,7 +55,7 @@ export async function buildApp({ runtime, threads, bus, nodes, secrets, access, 
 
   app.put<{ Body: RuntimeUpdate }>('/api/runtime', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    if (body.mode === undefined && body.concurrency === undefined && body.approvals === undefined) {
+    if (body.mode === undefined && body.concurrency === undefined && body.approvals === undefined && body.sessionDefaults === undefined) {
       return reply.status(400).send({ error: 'Send { "mode": "api" | "subscription" }, { "concurrency": n } and/or { "approvals": "ask" | "auto" | "all" }.' });
     }
     if (body.mode !== undefined && !isRunnerMode(body.mode)) {
@@ -64,6 +64,7 @@ export async function buildApp({ runtime, threads, bus, nodes, secrets, access, 
     let state = undefined;
     if (body.concurrency !== undefined) state = await runtime.setConcurrency(Number(body.concurrency));
     if (body.approvals !== undefined) state = await runtime.setApprovals(body.approvals as ApprovalPolicy);
+    if (body.sessionDefaults !== undefined) state = await runtime.setSessionDefaults(body.sessionDefaults as NonNullable<RuntimeUpdate['sessionDefaults']>);
     if (body.mode !== undefined) state = await runtime.setMode(body.mode);
     return state;
   });
@@ -98,6 +99,10 @@ export async function buildApp({ runtime, threads, bus, nodes, secrets, access, 
   );
 
   app.get<{ Params: { id: string } }>('/api/threads/:id', async (req) => threads.detail(req.params.id));
+
+  app.patch<{ Params: { id: string }; Body: { model?: string | null; thinking?: string | null } }>('/api/threads/:id', async (req) =>
+    threads.updateThreadSettings(req.params.id, req.body ?? {}),
+  );
 
   app.get<{ Params: { id: string } }>('/api/threads/:id/messages', async (req) => threads.messages(req.params.id));
 

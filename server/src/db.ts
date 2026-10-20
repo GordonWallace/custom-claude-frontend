@@ -114,6 +114,8 @@ const migrations: string[] = [
      text       TEXT NOT NULL,
      created_at TEXT NOT NULL
    );`,
+  `ALTER TABLE threads ADD COLUMN model TEXT;
+   ALTER TABLE threads ADD COLUMN thinking TEXT;`,
 ];
 
 /** Opens the SQLite file (or ':memory:') and applies any migrations it hasn't seen. */

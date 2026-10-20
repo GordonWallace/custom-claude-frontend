@@ -91,6 +91,17 @@ describe('SdkRunner launch profiles', () => {
     expect(seen.options?.resume).toBe('sess-1');
   });
 
+  it('maps thinking to an effort level, or turns thinking off', async () => {
+    const { fn, seen } = fakeQuery();
+    const runner = new CliRunner('/c', {}, fn);
+    await drain(runner.start(cfg({ model: 'opus', thinking: 'xhigh' }), 'hi').events);
+    expect(seen.options).toMatchObject({ model: 'opus', effort: 'xhigh' });
+    expect(seen.options?.thinking).toBeUndefined();
+    await drain(runner.start(cfg({ thinking: 'off' }), 'hi').events);
+    expect(seen.options).toMatchObject({ thinking: { type: 'disabled' } });
+    expect(seen.options?.effort).toBeUndefined();
+  });
+
   it('runs a follow-up sent mid-run as the next turn of the same run', async () => {
     const { fn, seen } = fakeQuery();
     const handle = new CliRunner('/c', {}, fn).start(cfg(), 'one');

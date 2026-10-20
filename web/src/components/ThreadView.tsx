@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Message, ModeChangedError, NodeView, ProjectUsage, RunnerMode, Thread, ThreadDetail } from '@ccf/shared';
-import { ApiError, BILLING_CONSEQUENCE, MODE_LABEL, getThread, interruptThread, postMessage, resetCoordinator } from '../api';
+import type { Message, ModeChangedError, NodeView, ProjectUsage, RunnerMode, RuntimeState, ThinkingLevel, Thread, ThreadDetail } from '@ccf/shared';
+import { ApiError, BILLING_CONSEQUENCE, MODE_LABEL, getThread, interruptThread, postMessage, resetCoordinator, updateThreadSettings } from '../api';
+import { SessionPickers, THINKING_LABEL } from './SessionPickers';
 import { ContextMeter } from './ContextMeter';
 import { Markdown } from './Markdown';
 import { MemoryDialog } from './MemoryDialog';
@@ -23,10 +24,12 @@ interface Props {
   usage?: ProjectUsage | null;
   /** Nodes, to name the one the thread runs on. */
   nodes?: NodeView[];
+  /** For the model and thinking pickers. */
+  runtime?: RuntimeState | null;
 }
 
 /** A conversation: the project chat (the coordinator) in the centre pane, or one thread in the right pane. */
-export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onClose, usage, nodes }: Props) {
+export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onClose, usage, nodes, runtime }: Props) {
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
   const [dialog, setDialog] = useState<'memory' | 'reset'>();
   const { epoch } = useConnection();
@@ -128,7 +131,7 @@ export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onCl
         <div ref={bottom} />
       </div>
 
-      <Composer threadId={threadId} busy={busy} queued={thread.status === 'queued'} isChat={isChat} />
+      <Composer threadId={threadId} busy={busy} queued={thread.status === 'queued'} isChat={isChat} thread={thread} runtime={runtime} />
 
       {dialog === 'memory' && <MemoryDialog projectId={detail.project.id} onClose={() => setDialog(undefined)} />}
       {dialog === 'reset' && <ResetDialog projectId={detail.project.id} onClose={() => setDialog(undefined)} />}
@@ -189,6 +192,8 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
               <div key={m.id} className={`run-divider run-divider-${mode}`} data-testid="run-started">
                 <span>
                   Run · {MODE_LABEL[mode]}
+                  {m.meta?.model ? ` · ${String(m.meta.model)}` : ''}
+                  {m.meta?.thinking ? ` · thinking ${THINKING_LABEL[m.meta.thinking as ThinkingLevel]?.toLowerCase() ?? String(m.meta.thinking)}` : ''}
                   {m.meta?.resumed ? ' · resumed session' : ''}
                   {(() => {
                     const node = nodes?.find((n) => n.id === m.meta?.nodeId);
@@ -330,7 +335,16 @@ function ToolCall({ name, input, result, ended }: { name: string; input: unknown
   );
 }
 
-function Composer({ threadId, busy, queued, isChat }: { threadId: string; busy: boolean; queued: boolean; isChat: boolean }) {
+interface ComposerProps {
+  threadId: string;
+  busy: boolean;
+  queued: boolean;
+  isChat: boolean;
+  thread: Thread;
+  runtime?: RuntimeState | null;
+}
+
+function Composer({ threadId, busy, queued, isChat, thread, runtime }: ComposerProps) {
   const [text, setText] = useState('');
   const [error, setError] = useState<string>();
   const [modeChange, setModeChange] = useState<ModeChangedError & { text: string }>();
@@ -382,6 +396,18 @@ function Composer({ threadId, busy, queued, isChat }: { threadId: string; busy: 
           )}
         </div>
       </div>
+      {runtime && (
+        <div className="composer-options">
+          <SessionPickers
+            compact
+            models={runtime.models}
+            value={{ model: thread.model, thinking: thread.thinking }}
+            fallback={runtime.sessionDefaults[thread.kind]}
+            onChange={(patch) => void updateThreadSettings(threadId, patch).catch((e: Error) => setError(e.message))}
+          />
+          {busy && <span className="muted small">Changes apply from the next run.</span>}
+        </div>
+      )}
 
       {modeChange && (
         <div className="overlay" role="dialog" aria-modal aria-labelledby="mode-change-title">

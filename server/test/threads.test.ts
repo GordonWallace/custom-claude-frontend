@@ -287,3 +287,41 @@ describe('thread state machine', () => {
     expect(canTransition('interrupted', 'idle')).toBe(false);
   });
 });
+
+describe('model and thinking', () => {
+  it("uses the thread's own choice, else the default for its kind, and passes it to the run", async () => {
+    ctx = await setup({ mode: 'subscription' });
+    const thread = await firstThread(ctx);
+    const put = await ctx.app.inject({
+      method: 'PUT',
+      url: '/api/runtime',
+      payload: { sessionDefaults: { thread: { model: 'sonnet', thinking: 'medium' }, coordinator: { model: 'opus' } } },
+    });
+    expect(put.json()).toMatchObject({ sessionDefaults: { thread: { model: 'sonnet', thinking: 'medium' }, coordinator: { model: 'opus', thinking: null } } });
+
+    await post(ctx, thread.id, { text: 'one' });
+    await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
+    expect(ctx.runners.subscription.calls[0].cfg).toMatchObject({ model: 'sonnet', thinking: 'medium' });
+
+    const patched = await ctx.app.inject({ method: 'PATCH', url: `/api/threads/${thread.id}`, payload: { thinking: 'off' } });
+    expect(patched.json()).toMatchObject({ model: null, thinking: 'off' });
+    await post(ctx, thread.id, { text: 'two' });
+    await until(() => ctx!.runners.subscription.calls.length === 2 && ctx!.store.getThread(thread.id)!.status === 'idle');
+    expect(ctx.runners.subscription.calls[1].cfg).toMatchObject({ model: 'sonnet', thinking: 'off' });
+    expect(ctx.store.listMessages(thread.id).filter((m) => m.kind === 'run_started').at(-1)?.meta).toMatchObject({ model: 'sonnet', thinking: 'off' });
+
+    expect((await ctx.app.inject({ method: 'PATCH', url: `/api/threads/${thread.id}`, payload: { thinking: 'huge' } })).statusCode).toBe(400);
+  });
+
+  it('keeps the model list the CLI reports', async () => {
+    ctx = await setup({ mode: 'subscription' });
+    const thread = await firstThread(ctx);
+    ctx.runners.subscription.script = async function* () {
+      yield { type: 'models', models: [{ value: 'default', label: 'Default' }, { value: 'opus', label: 'Opus', efforts: ['low', 'high'] }] };
+      yield { type: 'result', ok: true, finalText: '' };
+    };
+    await post(ctx, thread.id, { text: 'hi' });
+    await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
+    expect((await ctx.app.inject({ method: 'GET', url: '/api/runtime' })).json().models).toEqual([{ value: 'opus', label: 'Opus', efforts: ['low', 'high'] }]);
+  });
+});

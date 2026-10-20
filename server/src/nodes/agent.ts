@@ -194,6 +194,7 @@ export class NodeAgent {
     return {
       cwd,
       model: cfg.model,
+      thinking: cfg.thinking,
       appendSystemPrompt: cfg.appendSystemPrompt,
       mcpServers: cfg.mcpServers.map((s) => ({ ...s, url: base + s.url })),
       allowedTools: cfg.allowedTools,

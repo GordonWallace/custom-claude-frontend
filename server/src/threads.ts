@@ -10,6 +10,8 @@ import type {
   Project,
   ProjectUsage,
   RunnerMode,
+  SessionDefaults,
+  ThinkingLevel,
   Thread,
   ThreadDetail,
   ThreadStatus,
@@ -25,7 +27,7 @@ import { gitCredentialEnv } from './nodes/git.js';
 import type { NodeHub } from './nodes/hub.js';
 import { OFFLINE_AFTER_MS, type NodeInfoReport, type WireRunConfig, type Workspace } from './nodes/protocol.js';
 import type { PermissionDecision, PermissionRequest, RunHandle } from './runners/types.js';
-import { modeLabel, type RuntimeLogger, type RuntimeService } from './runtime.js';
+import { isThinkingLevel, modeLabel, type RuntimeLogger, type RuntimeService } from './runtime.js';
 import type { SecretStore } from './secrets.js';
 import type { NodeRow, Store } from './store.js';
 import { assertTransition, isBusy } from './threadState.js';
@@ -553,6 +555,7 @@ export class ThreadService {
       this.store.updateThread(thread.id, { nodeId, worktreePath: null, handoffFrom: null, handoffNote: null });
     }
 
+    const settings = this.sessionSettings(thread);
     this.setStatus(thread.id, 'running', { lastMode: mode });
     this.addMessage({
       threadId: thread.id,
@@ -560,7 +563,7 @@ export class ThreadService {
       author: 'system',
       kind: 'run_started',
       text: modeLabel(mode),
-      meta: { mode, resumed: Boolean(thread.claudeSessionId), nodeId },
+      meta: { mode, resumed: Boolean(thread.claudeSessionId), nodeId, model: settings.model, thinking: settings.thinking },
     });
 
     const cfg: WireRunConfig = {
@@ -570,6 +573,8 @@ export class ThreadService {
       disallowedTools: thread.kind === 'coordinator' ? ['Task', 'Agent'] : undefined,
       appendSystemPrompt: rolePrompt(thread.kind) + memoryPrompt(project),
       permissionMode: 'default',
+      model: settings.model ?? undefined,
+      thinking: settings.thinking ?? undefined,
       maxTurns: this.opts.maxTurns,
       sessionHookPath: `/api/hooks/session-start/${token}`,
     };
@@ -658,6 +663,9 @@ export class ThreadService {
                 autoCompactAt: event.autoCompactAt ?? null,
               }),
             );
+            break;
+          case 'models':
+            this.runtime.recordModels(event.models);
             break;
           case 'plan_usage':
             // The plan meter only means something for runs billed to the plan.
@@ -911,6 +919,26 @@ export class ThreadService {
       this.nodesQueued = false;
       this.bus.publish({ type: 'nodes', nodes: this.nodesView() });
     }, 50).unref();
+  }
+
+  /** The model and thinking level a thread's next run uses: its own choice, else the default for its kind. */
+  sessionSettings(thread: Thread): SessionDefaults {
+    const defaults = this.runtime.sessionDefaults(thread.kind);
+    return { model: thread.model ?? defaults.model, thinking: thread.thinking ?? defaults.thinking };
+  }
+
+  /** Sets a thread's own model or thinking level (null goes back to the default). Applies from its next run. */
+  updateThreadSettings(threadId: string, update: { model?: string | null; thinking?: string | null }): Thread {
+    this.getThread(threadId);
+    if (update.thinking !== undefined && update.thinking !== null && !isThinkingLevel(update.thinking)) {
+      throw new HttpError(400, 'thinking must be off, low, medium, high, xhigh or max, or null for the default.');
+    }
+    const thread = this.store.updateThread(threadId, {
+      model: update.model === undefined ? undefined : update.model?.trim() || null,
+      thinking: update.thinking === undefined ? undefined : (update.thinking as ThinkingLevel | null),
+    });
+    this.publishThread(thread);
+    return thread;
   }
 
   /**

@@ -34,6 +34,25 @@ export interface PlanUsage {
  */
 export type ApprovalPolicy = 'ask' | 'auto' | 'all';
 
+/** How hard Claude thinks: off (no extended thinking) or an effort level. Null anywhere means "use the default". */
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** A model Claude Code offers, as its CLI reports them (or a short built-in list until a run has reported). */
+export interface ModelOption {
+  /** Alias or model id passed to Claude Code, such as "opus". */
+  value: string;
+  label: string;
+  description?: string;
+  /** Effort levels the model takes; absent when unknown. */
+  efforts?: ThinkingLevel[];
+}
+
+/** Model and thinking for new runs; null leaves the choice to Claude Code. */
+export interface SessionDefaults {
+  model: string | null;
+  thinking: ThinkingLevel | null;
+}
+
 export interface RuntimeState {
   /** Null until the user picks a mode, when neither config.json nor CCF_MODE sets a default. */
   mode: RunnerMode | null;
@@ -47,6 +66,9 @@ export interface RuntimeState {
   /** True when ANTHROPIC_API_KEY is set but Subscription mode is active, so the key is ignored for runs. */
   apiKeyIgnored: boolean;
   approvals: ApprovalPolicy;
+  /** Defaults for project chats (coordinator) and threads; each thread can override them. */
+  sessionDefaults: { coordinator: SessionDefaults; thread: SessionDefaults };
+  models: ModelOption[];
   /** Latest measured plan usage from Subscription-mode runs; null until one has reported it. */
   planUsage: PlanUsage | null;
 }
@@ -55,6 +77,7 @@ export interface RuntimeUpdate {
   mode?: RunnerMode;
   concurrency?: number;
   approvals?: ApprovalPolicy;
+  sessionDefaults?: { coordinator?: Partial<SessionDefaults>; thread?: Partial<SessionDefaults> };
 }
 
 export interface RuntimeError {
@@ -110,6 +133,9 @@ export interface Thread {
   nodeId: string | null;
   /** Where the thread's session works on its node, for the terminal resume command. */
   worktreePath: string | null;
+  /** This thread's own model and thinking level; null uses the default for its kind. */
+  model: string | null;
+  thinking: ThinkingLevel | null;
   createdAt: string;
   updatedAt: string;
 }

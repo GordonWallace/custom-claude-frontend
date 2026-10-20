@@ -915,3 +915,9 @@ pre.command {
 .chip-wrap { white-space: normal; max-width: none; overflow: visible; }
 .pairing-setup ol { padding-left: 20px; display: grid; gap: 6px; margin: 8px 0 12px; }
 .pairing-setup p { margin: 0; }
+
+/* Model and thinking pickers */
+.session-pickers { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.session-pickers select { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); max-width: 100%; }
+.composer-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.defaults-row { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; margin-top: 8px; }

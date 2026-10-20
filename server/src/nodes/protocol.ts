@@ -1,4 +1,4 @@
-import type { NodeResources, RunnerMode } from '@ccf/shared';
+import type { NodeResources, RunnerMode, ThinkingLevel } from '@ccf/shared';
 import type { McpServerConfig, RunEvent } from '../runners/types.js';
 
 /**
@@ -25,6 +25,7 @@ export type Workspace =
 /** A RunConfig as it crosses the wire: no callbacks, and URLs relative to the orchestrator. */
 export interface WireRunConfig {
   model?: string;
+  thinking?: ThinkingLevel;
   appendSystemPrompt?: string;
   /** `url` is a path such as /mcp; the node puts its own base URL for the orchestrator in front. */
   mcpServers: McpServerConfig[];

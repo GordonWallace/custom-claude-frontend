@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { ApprovalPolicy, AuthStatus, RunnerMode, RuntimeState, SecretName, SecretStatus } from '@ccf/shared';
+import type { ApprovalPolicy, AuthStatus, RunnerMode, SessionDefaults, RuntimeState, SecretName, SecretStatus } from '@ccf/shared';
 import { getAuth, listSecrets, putRuntime, putSecret, setPassword } from '../api';
 import { usePrefs } from '../prefs';
 import { ModeOptions } from './ModeOptions';
+import { SessionPickers } from './SessionPickers';
 
 interface Props {
   state: RuntimeState;
@@ -22,6 +23,15 @@ export function SettingsPanel({ state, onPick, onState, onRefresh, onClose }: Pr
     setError(undefined);
     try {
       onState(await putRuntime({ concurrency: Number(concurrency) }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const saveDefaults = async (kind: 'coordinator' | 'thread', patch: Partial<SessionDefaults>) => {
+    setError(undefined);
+    try {
+      onState(await putRuntime({ sessionDefaults: { [kind]: patch } }));
     } catch (err) {
       setError((err as Error).message);
     }
@@ -77,6 +87,23 @@ export function SettingsPanel({ state, onPick, onState, onRefresh, onClose }: Pr
           </button>
         </div>
         {error && <p className="error">{error}</p>}
+      </section>
+
+      <section>
+        <h3>Models and thinking</h3>
+        <p className="muted">Defaults for new runs. Each chat can pick its own by its message box.</p>
+        {(['coordinator', 'thread'] as const).map((kind) => (
+          <div key={kind} className="defaults-row">
+            <span>{kind === 'coordinator' ? 'Project chats' : 'Threads'}</span>
+            <SessionPickers
+              models={state.models}
+              value={state.sessionDefaults[kind]}
+              fallback={null}
+              label={kind === 'coordinator' ? 'Project chat default' : 'Thread default'}
+              onChange={(patch) => void saveDefaults(kind, patch)}
+            />
+          </div>
+        ))}
       </section>
 
       <section>

@@ -40,6 +40,7 @@ export abstract class SdkRunner implements SessionRunner {
     const options: Options = {
       cwd: cfg.cwd,
       model: cfg.model,
+      ...(cfg.thinking === 'off' ? { thinking: { type: 'disabled' as const } } : cfg.thinking ? { effort: cfg.thinking } : {}),
       resume,
       pathToClaudeCodeExecutable: executablePath,
       // CLAUDE_CODE_ENTRYPOINT=cli makes the transcript look like a plain `claude -p` session rather than an SDK one.
@@ -79,9 +80,15 @@ export abstract class SdkRunner implements SessionRunner {
 
     async function* events(): AsyncGenerator<RunEvent> {
       let sawResult = false;
+      let askedModels = false;
       try {
         for await (const msg of q) {
           for (const event of mapSdkMessage(msg, mode)) yield event;
+          if (!askedModels && msg.type === 'system' && msg.subtype === 'init') {
+            askedModels = true;
+            const models = await modelOptions(q);
+            if (models) yield models;
+          }
           if (msg.type === 'system' && msg.subtype === 'background_tasks_changed') {
             input.setBackground(msg.tasks.filter((t) => !t.ambient).length);
           } else if (msg.type === 'assistant' || (msg.type === 'system' && msg.subtype === 'init')) {
@@ -130,6 +137,28 @@ async function contextUsage(q: ReturnType<QueryFn>): Promise<RunEvent | undefine
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000).unref()),
     ]);
     return { type: 'context', usedTokens: usage.totalTokens, maxTokens: usage.maxTokens, autoCompactAt: usage.autoCompactThreshold };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The CLI's model list, for the model pickers. Optional and bounded like contextUsage. */
+async function modelOptions(q: ReturnType<QueryFn>): Promise<RunEvent | undefined> {
+  if (typeof q.supportedModels !== 'function') return undefined;
+  try {
+    const models = await Promise.race([
+      q.supportedModels(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000).unref()),
+    ]);
+    return {
+      type: 'models',
+      models: models.map((m) => ({
+        value: m.value,
+        label: m.displayName,
+        description: m.description,
+        efforts: m.supportsEffort === false ? [] : m.supportedEffortLevels,
+      })),
+    };
   } catch {
     return undefined;
   }

@@ -62,6 +62,8 @@ export const createThread = (projectId: string) => request<Thread>('POST', `/api
 export const getThread = (id: string) => request<ThreadDetail>('GET', `/api/threads/${id}`);
 export const postMessage = (id: string, body: PostMessageBody) =>
   request<Message>('POST', `/api/threads/${id}/messages`, body);
+export const updateThreadSettings = (id: string, patch: { model?: string | null; thinking?: string | null }) =>
+  request<Thread>('PATCH', `/api/threads/${id}`, patch);
 export const interruptThread = (id: string) => request<{ ok: true }>('POST', `/api/threads/${id}/interrupt`);
 export const getMemory = (projectId: string) => request<{ text: string }>('GET', `/api/projects/${projectId}/memory`);
 export const putMemory = (projectId: string, text: string) =>

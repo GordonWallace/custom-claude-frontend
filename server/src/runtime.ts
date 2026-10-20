@@ -1,4 +1,4 @@
-import type { ApprovalPolicy, PlanUsage, RunnerHealth, RunnerMode, RuntimeState } from '@ccf/shared';
+import type { ApprovalPolicy, ModelOption, PlanUsage, RunnerHealth, RunnerMode, RuntimeState, RuntimeUpdate, SessionDefaults, ThinkingLevel } from '@ccf/shared';
 import { isRunnerMode } from './config.js';
 import { HttpError } from './errors.js';
 import type { Settings } from './db.js';
@@ -6,6 +6,7 @@ import type { EventBus } from './events.js';
 import type { SessionRunner } from './runners/types.js';
 
 const HEALTH_TTL_MS = 15_000;
+const THINKING_LEVELS: ThinkingLevel[] = ['off', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export class RuntimeError extends HttpError {
   constructor(statusCode: number, message: string, reason?: string, health?: RunnerHealth) {
@@ -59,6 +60,47 @@ export class RuntimeService {
     return this.publish();
   }
 
+  /** Model and thinking defaults for one kind of session, from the settings table. */
+  sessionDefaults(kind: 'coordinator' | 'thread'): SessionDefaults {
+    const model = this.settings.get(`defaults.${kind}.model`);
+    const thinking = this.settings.get(`defaults.${kind}.thinking`);
+    return { model: model || null, thinking: isThinkingLevel(thinking) ? thinking : null };
+  }
+
+  async setSessionDefaults(update: NonNullable<RuntimeUpdate['sessionDefaults']>): Promise<RuntimeState> {
+    for (const kind of ['coordinator', 'thread'] as const) {
+      const patch = update[kind];
+      if (!patch) continue;
+      if (patch.thinking !== undefined && patch.thinking !== null && !isThinkingLevel(patch.thinking)) {
+        throw new RuntimeError(400, `thinking must be one of ${THINKING_LEVELS.join(', ')}, or null for the default.`);
+      }
+      if (patch.model !== undefined) this.settings.set(`defaults.${kind}.model`, patch.model?.trim() ?? '');
+      if (patch.thinking !== undefined) this.settings.set(`defaults.${kind}.thinking`, patch.thinking ?? '');
+    }
+    return this.publish();
+  }
+
+  /** Models the CLI last reported, or a short list of aliases until a run has reported them. */
+  models(): ModelOption[] {
+    const stored = this.settings.get('models.catalog');
+    if (stored) return JSON.parse(stored) as ModelOption[];
+    return [
+      { value: 'fable', label: 'Fable' },
+      { value: 'opus', label: 'Opus' },
+      { value: 'sonnet', label: 'Sonnet' },
+      { value: 'haiku', label: 'Haiku' },
+    ];
+  }
+
+  recordModels(models: ModelOption[]): void {
+    // "default" is Claude Code's own pick, which the pickers already offer as "Default".
+    const list = models.filter((m) => m.value !== 'default');
+    const json = JSON.stringify(list);
+    if (list.length === 0 || json === this.settings.get('models.catalog')) return;
+    this.settings.set('models.catalog', json);
+    void this.publish();
+  }
+
   /** The runner new runs should use. Throws 409 if no mode is chosen or its runner isn't usable. */
   async activeRunner(): Promise<SessionRunner> {
     const mode = this.mode;
@@ -105,6 +147,8 @@ export class RuntimeService {
       spendUsdEstimate: this.apiSpend(),
       spendWarnUsd: this.defaults.spendWarnUsd ?? null,
       approvals: this.approvals,
+      sessionDefaults: { coordinator: this.sessionDefaults('coordinator'), thread: this.sessionDefaults('thread') },
+      models: this.models(),
       apiKeyIgnored: mode === 'subscription' && Boolean(this.env.ANTHROPIC_API_KEY?.trim()),
       planUsage: this.planUsage(),
     };
@@ -181,4 +225,8 @@ export function modeLabel(mode: RunnerMode): string {
 
 export function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
   return value === 'ask' || value === 'auto' || value === 'all';
+}
+
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return THINKING_LEVELS.includes(value as ThinkingLevel);
 }

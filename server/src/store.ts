@@ -19,6 +19,8 @@ interface ThreadRow {
   worktree_path: string | null;
   handoff_from: string | null;
   handoff_note: string | null;
+  model: string | null;
+  thinking: Thread['thinking'];
   created_at: string;
   updated_at: string;
 }
@@ -62,6 +64,8 @@ const toThread = (r: ThreadRow): Thread => ({
   autoCompactAt: r.auto_compact_at,
   nodeId: r.node_id,
   worktreePath: r.worktree_path,
+  model: r.model,
+  thinking: r.thinking,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -185,7 +189,7 @@ export class Store {
     patch: Partial<
       Pick<
         Thread,
-        'status' | 'claudeSessionId' | 'lastMode' | 'contextTokens' | 'contextWindow' | 'autoCompactAt' | 'title' | 'nodeId' | 'worktreePath'
+        'status' | 'claudeSessionId' | 'lastMode' | 'contextTokens' | 'contextWindow' | 'autoCompactAt' | 'title' | 'nodeId' | 'worktreePath' | 'model' | 'thinking'
       > & { handoffFrom: string | null; handoffNote: string | null }
     >,
   ): Thread {
@@ -201,6 +205,8 @@ export class Store {
       worktreePath: 'worktree_path',
       handoffFrom: 'handoff_from',
       handoffNote: 'handoff_note',
+      model: 'model',
+      thinking: 'thinking',
     };
     // undefined leaves a column alone; null clears it.
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
