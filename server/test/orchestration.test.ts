@@ -168,6 +168,48 @@ describe('completion notices', () => {
     expect(ctx.runners.subscription.calls).toHaveLength(1);
     expect(ctx.store.listMessages(p.coordinatorThreadId)).toEqual([]);
   });
+
+  it("keeps a user's direct conversation with a coordinator thread as background, without a coordinator turn", async () => {
+    ctx = await setup({ mode: 'subscription' });
+    const { project: p, coordinator } = project(ctx);
+    ctx.store.updateThread(p.coordinatorThreadId, { claudeSessionId: 'coord-session' });
+    ctx.runners.subscription.script = async function* (_cfg, message) {
+      yield { type: 'result', ok: true, finalText: message.includes('villagers?') ? 'Correct, no villagers.' : 'Noted.' };
+    };
+    const a = ctx.threads.startThreadFor(coordinator, 'Describe the repo', 'describe it');
+    await until(() => ctx!.runners.subscription.calls.length === 2 && status(ctx!, p.coordinatorThreadId) === 'idle');
+
+    // The user asks the thread directly: the thread answers, the coordinator doesn't run.
+    await ctx.app.inject({ method: 'POST', url: `/api/threads/${a.id}/messages`, payload: { text: 'So there are no villagers?' } });
+    await until(() => ctx!.runners.subscription.calls.length === 3 && status(ctx!, a.id) === 'idle');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ctx.runners.subscription.calls).toHaveLength(3);
+    expect(ctx.store.listMessages(p.coordinatorThreadId).filter((m) => m.kind === 'thread_notice')).toHaveLength(1);
+
+    // The coordinator's next turn starts with it as background, once.
+    const send = (text: string) => ctx!.app.inject({ method: 'POST', url: `/api/threads/${p.coordinatorThreadId}/messages`, payload: { text } });
+    await send('what next?');
+    await until(() => ctx!.runners.subscription.calls.length === 4);
+    const turn = ctx.runners.subscription.calls[3].message;
+    expect(turn).toMatch(/^\[Background, no reply needed\]/);
+    expect(turn).toContain(`"Describe the repo" (thread_id: ${a.id}) answered.`);
+    expect(turn).toContain('The user wrote: So there are no villagers?');
+    expect(turn).toContain("The thread's final message: Correct, no villagers.");
+    expect(turn.endsWith('what next?')).toBe(true);
+    await until(() => status(ctx!, p.coordinatorThreadId) === 'idle');
+    await send('and then?');
+    await until(() => ctx!.runners.subscription.calls.length === 5);
+    expect(ctx.runners.subscription.calls[4].message).toBe('and then?');
+  });
+
+  it('reports a run back when the coordinator asked for it, even on a thread the user opened', async () => {
+    ctx = await setup({ mode: 'subscription' });
+    const { project: p, coordinator } = project(ctx);
+    const thread = ctx.threads.createThread(p.id);
+    ctx.threads.messageThreadFor(coordinator, thread.id, 'check the tests');
+    await until(() => ctx!.runners.subscription.calls.length === 2);
+    expect(ctx.runners.subscription.calls[1].message).toMatch(/^\[Thread update\]/);
+  });
 });
 
 describe('the app MCP server', () => {

@@ -303,6 +303,19 @@ export class Store {
     this.db.prepare('INSERT INTO queued_inputs (thread_id, text, created_at) VALUES (?, ?, ?)').run(threadId, text, now());
   }
 
+  addCoordinatorContext(projectId: string, text: string): void {
+    this.db.prepare('INSERT INTO coordinator_context (project_id, text, created_at) VALUES (?, ?, ?)').run(projectId, text, now());
+  }
+
+  /** Removes and returns a project's saved coordinator context, keeping only the newest entries. */
+  takeCoordinatorContext(projectId: string, limit: number): string[] {
+    const rows = this.db
+      .prepare('SELECT text FROM coordinator_context WHERE project_id = ? ORDER BY id DESC LIMIT ?')
+      .all(projectId, limit) as { text: string }[];
+    this.db.prepare('DELETE FROM coordinator_context WHERE project_id = ?').run(projectId);
+    return rows.map((r) => r.text).reverse();
+  }
+
   /** Removes and returns a thread's queued inputs, oldest first. */
   takeQueuedInputs(threadId: string): string[] {
     const rows = this.db.prepare('SELECT text FROM queued_inputs WHERE thread_id = ? ORDER BY id').all(threadId) as { text: string }[];

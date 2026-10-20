@@ -107,6 +107,13 @@ const migrations: string[] = [
      created_at TEXT NOT NULL,
      expires_at TEXT NOT NULL
    );`,
+  // Background for the coordinator about conversations the user had directly with threads.
+  `CREATE TABLE coordinator_context (
+     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+     project_id TEXT NOT NULL REFERENCES projects(id),
+     text       TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   );`,
 ];
 
 /** Opens the SQLite file (or ':memory:') and applies any migrations it hasn't seen. */

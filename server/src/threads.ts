@@ -37,6 +37,10 @@ const PROJECT_CHAT_TITLE = 'Project chat';
  * summary; this only catches a summary that runs long, and says where the rest is.
  */
 const NOTICE_TEXT_LIMIT = 4000;
+/** Per user message, in the background the coordinator gets about direct thread conversations. */
+const DIRECT_USER_LIMIT = 1000;
+/** Direct conversations kept for the coordinator's next turn; older ones are dropped. */
+const DIRECT_CONTEXT_ENTRIES = 10;
 /** How much of MEMORY.md goes into each session's system prompt; read_memory has the rest. */
 const MEMORY_PROMPT_LIMIT = 16_000;
 
@@ -529,6 +533,10 @@ export class ThreadService {
 
   private startRun(thread: Thread, project: Project, nodeId: string, mode: RunnerMode, input: string): void {
     let text = this.needsSeed(thread) ? `${this.coordinatorSeed(thread)}\n\n${input}` : input;
+    if (thread.kind === 'coordinator') {
+      const background = this.directConversations(thread.projectId);
+      if (background) text = `${background}\n\n${text}`;
+    }
     const run = this.store.startRun(thread.id, mode);
     const token = randomUUID();
     this.runTokens.set(token, thread.id);
@@ -749,7 +757,16 @@ export class ThreadService {
     this.setStatus(threadId, status);
 
     const thread = this.getThread(threadId);
-    if (thread.origin === 'coordinator' && !cutOff) this.notifyCoordinator(thread, outcome, finalText);
+    if (thread.kind === 'thread' && !cutOff) {
+      // A run the coordinator asked for gets reported back so it can answer the user. A run only
+      // the user asked for, in the thread itself, is saved as background for the coordinator's next turn.
+      const asked = this.whoAsked(threadId, runId);
+      if (asked.coordinator || (asked.user.length === 0 && thread.origin === 'coordinator')) {
+        this.notifyCoordinator(thread, outcome, finalText);
+      } else if (asked.user.length > 0) {
+        this.saveDirectConversation(thread, outcome, asked.user, finalText);
+      }
+    }
     if (active && moving === 'lost') {
       this.release(threadId, active.nodeId, `${nodeName} went offline mid-turn, so anything it hadn't committed and pushed may be lost`);
     } else if (active && (moving === 'drain' || moving === 'stop')) {
@@ -894,6 +911,54 @@ export class ThreadService {
       this.nodesQueued = false;
       this.bus.publish({ type: 'nodes', nodes: this.nodesView() });
     }, 50).unref();
+  }
+
+  /**
+   * Who wrote the inputs of a run: every user-authored message since the previous run that finished
+   * normally (a run cut off by a node going away is carried on by the next, so its inputs count too).
+   */
+  private whoAsked(threadId: string, runId: number): { coordinator: boolean; user: string[] } {
+    const messages = this.store.listMessages(threadId);
+    let start = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.kind === 'run_ended' && m.runId !== runId && !m.meta?.moving) {
+        start = i + 1;
+        break;
+      }
+    }
+    const asked = { coordinator: false, user: [] as string[] };
+    for (const m of messages.slice(start)) {
+      if (m.kind !== 'text' || m.author !== 'user') continue;
+      if (m.meta?.from === 'coordinator') asked.coordinator = true;
+      else asked.user.push(m.text);
+    }
+    return asked;
+  }
+
+  /** The user talked to a thread directly: keep what was asked and answered for the coordinator, without a turn. */
+  private saveDirectConversation(thread: Thread, outcome: 'done' | 'stopped' | 'failed', userTexts: string[], finalText: string): void {
+    const trim = (text: string, limit: number) => (text.length > limit ? `${text.slice(0, limit)}…` : text);
+    const said = { done: 'answered', stopped: 'was stopped by the user', failed: 'failed' }[outcome];
+    const answer = finalText.trim();
+    this.store.addCoordinatorContext(
+      thread.projectId,
+      [
+        `- "${thread.title}" (thread_id: ${thread.id}) ${said}.`,
+        `  The user wrote: ${userTexts.map((t) => trim(t.trim(), DIRECT_USER_LIMIT)).join(' / ')}`,
+        `  The thread's final message: ${answer ? trim(answer, NOTICE_TEXT_LIMIT) : '(none)'}`,
+      ].join('\n'),
+    );
+  }
+
+  /** Background the coordinator gets at the start of its next turn; empty when there is none. */
+  private directConversations(projectId: string): string {
+    const entries = this.store.takeCoordinatorContext(projectId, DIRECT_CONTEXT_ENTRIES);
+    if (entries.length === 0) return '';
+    return [
+      '[Background, no reply needed] Since your last turn, the user talked directly with these threads in their own chats. This is so you know what was discussed and decided. Do not answer or restate it; use it only if it bears on what the user asks you.',
+      ...entries,
+    ].join('\n');
   }
 
   /** Lifecycle step 5: tell the coordinator a thread it started finished a run, with its final text trimmed. */
