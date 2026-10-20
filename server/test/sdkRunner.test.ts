@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ApiRunner } from '../src/runners/apiRunner.js';
 import { CliRunner } from '../src/runners/cliRunner.js';
-import { type QueryFn, TurnInput } from '../src/runners/sdkRunner.js';
+import { type QueryFn, TurnInput, versionedName } from '../src/runners/sdkRunner.js';
 import type { PermissionRequest, RunConfig } from '../src/runners/types.js';
 
 const result = { type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.01, usage: {} } as unknown as SDKMessage;
@@ -135,5 +135,13 @@ describe('SdkRunner launch profiles', () => {
     });
     expect(await canUseTool('Bash', {}, { signal, toolUseID: 't2', requestId: 'r2' })).toEqual({ behavior: 'deny', message: 'no' });
     expect(requests.map((r) => r.toolUseId)).toEqual(['t1', 't2']);
+  });
+});
+
+describe('model names', () => {
+  it('takes the version from the description when the CLI puts it there', () => {
+    expect(versionedName('Opus', 'Opus 5.5 · Best for everyday, complex tasks')).toEqual({ label: 'Opus 5.5', description: 'Best for everyday, complex tasks' });
+    expect(versionedName('Sonnet (1M context)', 'Sonnet 5.5 · Long sessions')).toEqual({ label: 'Sonnet 5.5 (1M context)', description: 'Long sessions' });
+    expect(versionedName('Custom', 'Something else entirely')).toEqual({ label: 'Custom', description: 'Something else entirely' });
   });
 });

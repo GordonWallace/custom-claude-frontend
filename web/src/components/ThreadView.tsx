@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Message, ModeChangedError, NodeView, ProjectUsage, RunnerMode, RuntimeState, ThinkingLevel, Thread, ThreadDetail } from '@ccf/shared';
+import type { Message, ModelOption, ModeChangedError, NodeView, ProjectUsage, RunnerMode, RuntimeState, ThinkingLevel, Thread, ThreadDetail } from '@ccf/shared';
 import { ApiError, BILLING_CONSEQUENCE, MODE_LABEL, getThread, interruptThread, postMessage, resetCoordinator, updateThreadSettings } from '../api';
 import { SessionPickers, THINKING_LABEL } from './SessionPickers';
 import { ContextMeter } from './ContextMeter';
@@ -124,7 +124,7 @@ export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onCl
             in parallel and report back.
           </p>
         )}
-        <Timeline messages={detail.messages} threads={threads} openThreadId={openThreadId} onOpenThread={onOpenThread} nodes={nodes} />
+        <Timeline messages={detail.messages} threads={threads} openThreadId={openThreadId} onOpenThread={onOpenThread} nodes={nodes} models={runtime?.models} />
         {detail.approvals.map((a) => (
           <ApprovalCard key={a.id} approval={a} />
         ))}
@@ -145,9 +145,10 @@ interface TimelineProps {
   openThreadId?: string;
   onOpenThread?: (threadId: string) => void;
   nodes?: NodeView[];
+  models?: ModelOption[];
 }
 
-function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: TimelineProps) {
+function Timeline({ messages, threads, openThreadId, onOpenThread, nodes, models }: TimelineProps) {
   const results = useMemo(() => {
     const map = new Map<string, Message>();
     for (const m of messages) if (m.kind === 'tool_result') map.set(String(m.meta?.toolUseId), m);
@@ -192,7 +193,7 @@ function Timeline({ messages, threads, openThreadId, onOpenThread, nodes }: Time
               <div key={m.id} className={`run-divider run-divider-${mode}`} data-testid="run-started">
                 <span>
                   Run · {MODE_LABEL[mode]}
-                  {m.meta?.model ? ` · ${String(m.meta.model)}` : ''}
+                  {m.meta?.model ? ` · ${models?.find((x) => x.value === m.meta?.model)?.label ?? String(m.meta.model)}` : ''}
                   {m.meta?.thinking ? ` · thinking ${THINKING_LABEL[m.meta.thinking as ThinkingLevel]?.toLowerCase() ?? String(m.meta.thinking)}` : ''}
                   {m.meta?.resumed ? ' · resumed session' : ''}
                   {(() => {

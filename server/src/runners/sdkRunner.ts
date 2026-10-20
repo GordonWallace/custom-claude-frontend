@@ -154,14 +154,28 @@ async function modelOptions(q: ReturnType<QueryFn>): Promise<RunEvent | undefine
       type: 'models',
       models: models.map((m) => ({
         value: m.value,
-        label: m.displayName,
-        description: m.description,
+        ...versionedName(m.displayName, m.description),
         efforts: m.supportsEffort === false ? [] : m.supportedEffortLevels,
       })),
     };
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The CLI names models by alias ("Opus") and puts the version at the start of the description
+ * ("Opus 5.5 · Best for everyday, complex tasks"); use the versioned name when it's there.
+ */
+export function versionedName(displayName: string, description: string): { label: string; description?: string } {
+  const [head, ...rest] = description.split(' · ');
+  // Keep a qualifier such as "(1M context)" that the description doesn't repeat.
+  const qualifier = displayName.match(/\s*\([^)]*\)$/)?.[0] ?? '';
+  const alias = displayName.slice(0, displayName.length - qualifier.length);
+  if (rest.length > 0 && head.toLowerCase().startsWith(alias.toLowerCase()) && head.length <= 40) {
+    return { label: head + qualifier, description: rest.join(' · ') };
+  }
+  return { label: displayName, description: description || undefined };
 }
 
 let hookScript = fileURLToPath(new URL('../../hooks/post-hook.mjs', import.meta.url));
