@@ -1,4 +1,4 @@
-import type { PlanUsage, RunnerHealth, RunnerMode, RuntimeState } from '@ccf/shared';
+import type { ApprovalPolicy, ModelOption, PlanUsage, RunnerHealth, RunnerMode, RuntimeState, RuntimeUpdate, SessionDefaults, ThinkingLevel } from '@ccf/shared';
 import { isRunnerMode } from './config.js';
 import { HttpError } from './errors.js';
 import type { Settings } from './db.js';
@@ -6,6 +6,7 @@ import type { EventBus } from './events.js';
 import type { SessionRunner } from './runners/types.js';
 
 const HEALTH_TTL_MS = 15_000;
+const THINKING_LEVELS: ThinkingLevel[] = ['off', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export class RuntimeError extends HttpError {
   constructor(statusCode: number, message: string, reason?: string, health?: RunnerHealth) {
@@ -31,7 +32,7 @@ export class RuntimeService {
     private readonly runners: Record<RunnerMode, SessionRunner>,
     private readonly settings: Settings,
     private readonly bus: EventBus,
-    private readonly defaults: { mode: RunnerMode | null; concurrency: number },
+    private readonly defaults: { mode: RunnerMode | null; concurrency: number; spendWarnUsd?: number | null; approvals?: ApprovalPolicy },
     private readonly env: NodeJS.ProcessEnv,
     private readonly log: RuntimeLogger,
     private readonly apiSpend: () => number = () => 0,
@@ -45,6 +46,59 @@ export class RuntimeService {
   get concurrency(): number {
     const stored = Number(this.settings.get('runtime.concurrency'));
     return Number.isInteger(stored) && stored > 0 ? stored : this.defaults.concurrency;
+  }
+
+  get approvals(): ApprovalPolicy {
+    const stored = this.settings.get('runtime.approvals');
+    return isApprovalPolicy(stored) ? stored : (this.defaults.approvals ?? 'ask');
+  }
+
+  async setApprovals(policy: ApprovalPolicy): Promise<RuntimeState> {
+    if (!isApprovalPolicy(policy)) throw new RuntimeError(400, 'approvals must be "ask", "auto" or "all".');
+    this.settings.set('runtime.approvals', policy);
+    this.log.info(`Tool approvals set to ${policy}`);
+    return this.publish();
+  }
+
+  /** Model and thinking defaults for one kind of session, from the settings table. */
+  sessionDefaults(kind: 'coordinator' | 'thread'): SessionDefaults {
+    const model = this.settings.get(`defaults.${kind}.model`);
+    const thinking = this.settings.get(`defaults.${kind}.thinking`);
+    return { model: model || null, thinking: isThinkingLevel(thinking) ? thinking : null };
+  }
+
+  async setSessionDefaults(update: NonNullable<RuntimeUpdate['sessionDefaults']>): Promise<RuntimeState> {
+    for (const kind of ['coordinator', 'thread'] as const) {
+      const patch = update[kind];
+      if (!patch) continue;
+      if (patch.thinking !== undefined && patch.thinking !== null && !isThinkingLevel(patch.thinking)) {
+        throw new RuntimeError(400, `thinking must be one of ${THINKING_LEVELS.join(', ')}, or null for the default.`);
+      }
+      if (patch.model !== undefined) this.settings.set(`defaults.${kind}.model`, patch.model?.trim() ?? '');
+      if (patch.thinking !== undefined) this.settings.set(`defaults.${kind}.thinking`, patch.thinking ?? '');
+    }
+    return this.publish();
+  }
+
+  /** Models the CLI last reported, or a short list of aliases until a run has reported them. */
+  models(): ModelOption[] {
+    const stored = this.settings.get('models.catalog');
+    if (stored) return JSON.parse(stored) as ModelOption[];
+    return [
+      { value: 'fable', label: 'Fable' },
+      { value: 'opus', label: 'Opus' },
+      { value: 'sonnet', label: 'Sonnet' },
+      { value: 'haiku', label: 'Haiku' },
+    ];
+  }
+
+  recordModels(models: ModelOption[]): void {
+    // "default" is Claude Code's own pick, which the pickers already offer as "Default".
+    const list = models.filter((m) => m.value !== 'default');
+    const json = JSON.stringify(list);
+    if (list.length === 0 || json === this.settings.get('models.catalog')) return;
+    this.settings.set('models.catalog', json);
+    void this.publish();
   }
 
   /** The runner new runs should use. Throws 409 if no mode is chosen or its runner isn't usable. */
@@ -77,6 +131,11 @@ export class RuntimeService {
     return health;
   }
 
+  /** The last health check of a mode, without checking again. */
+  cachedHealth(mode: RunnerMode): RunnerHealth | undefined {
+    return this.healthCache.get(mode);
+  }
+
   async state(refresh = false): Promise<RuntimeState> {
     const [api, subscription] = await Promise.all([this.health('api', refresh), this.health('subscription', refresh)]);
     const mode = this.mode;
@@ -86,6 +145,10 @@ export class RuntimeService {
       activeRuns: this.activeRuns,
       concurrency: this.concurrency,
       spendUsdEstimate: this.apiSpend(),
+      spendWarnUsd: this.defaults.spendWarnUsd ?? null,
+      approvals: this.approvals,
+      sessionDefaults: { coordinator: this.sessionDefaults('coordinator'), thread: this.sessionDefaults('thread') },
+      models: this.models(),
       apiKeyIgnored: mode === 'subscription' && Boolean(this.env.ANTHROPIC_API_KEY?.trim()),
       planUsage: this.planUsage(),
     };
@@ -158,4 +221,12 @@ export class RuntimeService {
 
 export function modeLabel(mode: RunnerMode): string {
   return mode === 'api' ? 'API mode' : 'Subscription mode';
+}
+
+export function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
+  return value === 'ask' || value === 'auto' || value === 'all';
+}
+
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return THINKING_LEVELS.includes(value as ThinkingLevel);
 }

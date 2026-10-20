@@ -65,6 +65,57 @@ const migrations: string[] = [
      created_at TEXT NOT NULL
    );
    CREATE INDEX queued_inputs_thread ON queued_inputs (thread_id, id);`,
+  `ALTER TABLE threads ADD COLUMN context_window INTEGER;
+   ALTER TABLE threads ADD COLUMN auto_compact_at INTEGER;
+   ALTER TABLE runs ADD COLUMN notional_cost_usd REAL;
+   CREATE TABLE plan_readings (
+     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+     observed_at        TEXT NOT NULL,
+     run_id             INTEGER REFERENCES runs(id),
+     five_hour          REAL,
+     five_hour_resets   TEXT,
+     seven_day          REAL,
+     seven_day_resets   TEXT
+   );`,
+  `ALTER TABLE projects ADD COLUMN repo_url TEXT;
+   ALTER TABLE projects ADD COLUMN base_branch TEXT;
+   ALTER TABLE threads ADD COLUMN node_id TEXT;
+   ALTER TABLE threads ADD COLUMN worktree_path TEXT;
+   ALTER TABLE threads ADD COLUMN handoff_from TEXT;
+   ALTER TABLE threads ADD COLUMN handoff_note TEXT;
+   CREATE TABLE nodes (
+     id             TEXT PRIMARY KEY,
+     name           TEXT NOT NULL,
+     is_local       INTEGER NOT NULL DEFAULT 0,
+     token_hash     TEXT,
+     state          TEXT NOT NULL DEFAULT 'enabled',
+     thread_limit   INTEGER NOT NULL DEFAULT 2,
+     last_seen_at   TEXT,
+     resources_json TEXT,
+     info_json      TEXT,
+     created_at     TEXT NOT NULL
+   );
+   CREATE TABLE secrets (
+     name       TEXT PRIMARY KEY,
+     iv         TEXT NOT NULL,
+     tag        TEXT NOT NULL,
+     ciphertext TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   );
+   CREATE TABLE auth_sessions (
+     token_hash TEXT PRIMARY KEY,
+     created_at TEXT NOT NULL,
+     expires_at TEXT NOT NULL
+   );`,
+  // Background for the coordinator about conversations the user had directly with threads.
+  `CREATE TABLE coordinator_context (
+     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+     project_id TEXT NOT NULL REFERENCES projects(id),
+     text       TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   );`,
+  `ALTER TABLE threads ADD COLUMN model TEXT;
+   ALTER TABLE threads ADD COLUMN thinking TEXT;`,
 ];
 
 /** Opens the SQLite file (or ':memory:') and applies any migrations it hasn't seen. */

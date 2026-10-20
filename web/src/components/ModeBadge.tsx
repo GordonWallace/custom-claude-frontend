@@ -7,6 +7,7 @@ export function ModeBadge({ state, onClick }: { state: RuntimeState | null; onCl
 
   const { mode } = state;
   const active = mode ? state.health[mode] : undefined;
+  const overSpend = state.spendWarnUsd !== null && state.spendUsdEstimate >= state.spendWarnUsd;
   return (
     <div className="badge-row">
       <button
@@ -18,7 +19,14 @@ export function ModeBadge({ state, onClick }: { state: RuntimeState | null; onCl
       >
         <span className="badge-dot" aria-hidden />
         {mode ? MODE_LABEL[mode] : 'No mode chosen'}
-        {mode === 'api' && <span className="badge-spend">${state.spendUsdEstimate.toFixed(2)} est.</span>}
+        {mode === 'api' && (
+          <span
+            className={`badge-spend${overSpend ? ' badge-spend-over' : ''}`}
+            title={overSpend ? `Estimated API spend is past the $${state.spendWarnUsd} warning set in config.json (spendWarnUsd).` : 'Estimated API spend of every API-mode run so far.'}
+          >
+            ${state.spendUsdEstimate.toFixed(2)} est.
+          </span>
+        )}
         {mode === 'subscription' && state.planUsage && <PlanUsageText usage={state.planUsage} />}
       </button>
       {active && !active.ok && (

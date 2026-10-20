@@ -1,7 +1,9 @@
-import { useState } from 'react';
-import type { RunnerMode, RuntimeState } from '@ccf/shared';
-import { putRuntime } from '../api';
+import { useEffect, useState } from 'react';
+import type { ApprovalPolicy, AuthStatus, RunnerMode, SessionDefaults, RuntimeState, SecretName, SecretStatus } from '@ccf/shared';
+import { getAuth, listSecrets, putRuntime, putSecret, setPassword } from '../api';
+import { usePrefs } from '../prefs';
 import { ModeOptions } from './ModeOptions';
+import { SessionPickers } from './SessionPickers';
 
 interface Props {
   state: RuntimeState;
@@ -15,11 +17,30 @@ export function SettingsPanel({ state, onPick, onState, onRefresh, onClose }: Pr
   const [concurrency, setConcurrency] = useState(String(state.concurrency));
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
+  const [prefs, setPrefs] = usePrefs();
 
   const saveConcurrency = async () => {
     setError(undefined);
     try {
       onState(await putRuntime({ concurrency: Number(concurrency) }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const saveDefaults = async (kind: 'coordinator' | 'thread', patch: Partial<SessionDefaults>) => {
+    setError(undefined);
+    try {
+      onState(await putRuntime({ sessionDefaults: { [kind]: patch } }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const setApprovals = async (approvals: ApprovalPolicy) => {
+    setError(undefined);
+    try {
+      onState(await putRuntime({ approvals }));
     } catch (err) {
       setError((err as Error).message);
     }
@@ -68,7 +89,189 @@ export function SettingsPanel({ state, onPick, onState, onRefresh, onClose }: Pr
         {error && <p className="error">{error}</p>}
       </section>
 
+      <section>
+        <h3>Models and thinking</h3>
+        <p className="muted">Defaults for new runs. Each chat can pick its own by its message box.</p>
+        {(['coordinator', 'thread'] as const).map((kind) => (
+          <div key={kind} className="defaults-row">
+            <span>{kind === 'coordinator' ? 'Project chats' : 'Threads'}</span>
+            <SessionPickers
+              models={state.models}
+              value={state.sessionDefaults[kind]}
+              fallback={null}
+              label={kind === 'coordinator' ? 'Project chat default' : 'Thread default'}
+              onChange={(patch) => void saveDefaults(kind, patch)}
+            />
+          </div>
+        ))}
+      </section>
+
+      <section>
+        <h3>Display</h3>
+        <label className="approval-option">
+          <input type="checkbox" checked={prefs.showToolCalls} onChange={(e) => setPrefs({ showToolCalls: e.target.checked })} />
+          <span>
+            <strong>Show tool calls</strong>
+            <span className="muted small">Each command, edit and search Claude runs, with its result. Saved in this browser.</span>
+          </span>
+        </label>
+      </section>
+
+      <section>
+        <h3>Tool approvals</h3>
+        <p className="muted">Applies to every thread and project chat, on every node, from the next tool call.</p>
+        <div className="approval-options" role="radiogroup" aria-label="Tool approvals">
+          {APPROVAL_OPTIONS.map((o) => (
+            <label key={o.value} className="approval-option">
+              <input
+                type="radio"
+                name="approvals"
+                checked={state.approvals === o.value}
+                onChange={() => void setApprovals(o.value)}
+              />
+              <span>
+                <strong>{o.label}</strong>
+                <span className="muted small">{o.help}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <Credentials />
+      <RemoteAccess />
+
       <p className="muted small">Active runs: {state.activeRuns}</p>
     </aside>
+  );
+}
+
+const APPROVAL_OPTIONS: { value: ApprovalPolicy; label: string; help: string }[] = [
+  { value: 'ask', label: 'Ask every time', help: 'Every tool call Claude Code would ask about waits for you.' },
+  {
+    value: 'auto',
+    label: 'Auto-approve, except risky commands',
+    help: 'Edits, reads, web fetches and shell commands run on their own. Recursive deletes, force pushes, sudo, piping a download into a shell, publishing packages and similar still ask.',
+  },
+  { value: 'all', label: 'Approve everything', help: 'Nothing asks. Only use this where a mistake is cheap to undo.' },
+];
+
+const SECRETS: Record<SecretName, { label: string; help: string; placeholder: string }> = {
+  claude_oauth_token: {
+    label: 'Claude token (Subscription mode)',
+    help: 'From `claude setup-token` on any machine signed in to your plan. Other nodes run Subscription threads with it; this machine keeps using its own login.',
+    placeholder: 'sk-ant-oat01-…',
+  },
+  anthropic_api_key: {
+    label: 'Anthropic API key (API mode)',
+    help: 'Used by every node in API mode when the server has no ANTHROPIC_API_KEY in its environment.',
+    placeholder: 'sk-ant-api03-…',
+  },
+  github_token: {
+    label: 'GitHub token',
+    help: 'A fine-grained token with contents read and write on your repos. Nodes clone and push threads\' branches with it.',
+    placeholder: 'github_pat_…',
+  },
+};
+
+/** Credentials the orchestrator hands to nodes with each run. Write-only: the server never sends them back. */
+function Credentials() {
+  const [status, setStatus] = useState<SecretStatus[]>([]);
+  const [values, setValues] = useState<Partial<Record<SecretName, string>>>({});
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    listSecrets().then(setStatus, (err: Error) => setError(err.message));
+  }, []);
+  const save = async (name: SecretName, value: string) => {
+    setError(undefined);
+    try {
+      setStatus(await putSecret(name, value));
+      setValues((v) => ({ ...v, [name]: '' }));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  return (
+    <section>
+      <h3>Credentials</h3>
+      <p className="muted small">Stored encrypted on this machine and sent to a node only for the run that needs it; nodes never save them.</p>
+      {status.map((s) => (
+        <div key={s.name} className="secret-row">
+          <div className="label">
+            <strong className="small">{SECRETS[s.name].label}</strong>
+            <span className={`small ${s.set ? 'ok' : 'muted'}`}>{s.set ? 'Saved' : 'Not set'}</span>
+          </div>
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder={s.set ? 'Saved; type to replace' : SECRETS[s.name].placeholder}
+            value={values[s.name] ?? ''}
+            onChange={(e) => setValues((v) => ({ ...v, [s.name]: e.target.value }))}
+            aria-label={SECRETS[s.name].label}
+          />
+          {values[s.name] ? (
+            <button type="button" onClick={() => save(s.name, values[s.name]!)}>
+              Save
+            </button>
+          ) : s.set ? (
+            <button type="button" className="link" onClick={() => save(s.name, '')}>
+              Remove
+            </button>
+          ) : (
+            <span />
+          )}
+          <p className="muted small" style={{ gridColumn: '1 / -1', margin: 0 }}>
+            {SECRETS[s.name].help}
+          </p>
+        </div>
+      ))}
+      {error && <p className="error">{error}</p>}
+    </section>
+  );
+}
+
+/** The password other devices log in with when the server listens beyond this machine. */
+function RemoteAccess() {
+  const [auth, setAuth] = useState<AuthStatus>();
+  const [password, setPw] = useState('');
+  const [note, setNote] = useState<string>();
+  useEffect(() => {
+    getAuth().then(setAuth, () => undefined);
+  }, []);
+  if (!auth) return null;
+  const save = async () => {
+    setNote(undefined);
+    try {
+      await setPassword(password);
+      setPw('');
+      setNote('Saved. Other devices need to log in again.');
+      setAuth(await getAuth());
+    } catch (err) {
+      setNote((err as Error).message);
+    }
+  };
+  return (
+    <section>
+      <h3>Remote access</h3>
+      <p className="muted small">
+        {auth.remoteAccess
+          ? 'On: the server accepts this machine, your Tailscale network and any allowedNetworks, and other devices log in with this password.'
+          : 'Off: only this machine can open the app. Set remoteAccess to true in config.json (or CCF_REMOTE_ACCESS=1) and restart to use it from your phone or add other nodes.'}
+      </p>
+      <div className="inline-form">
+        <input
+          type="password"
+          autoComplete="new-password"
+          placeholder={auth.passwordSet ? 'New password' : 'Set a password (8+ characters)'}
+          value={password}
+          onChange={(e) => setPw(e.target.value)}
+          aria-label="Remote access password"
+        />
+        <button type="button" onClick={save} disabled={password.length < 8}>
+          {auth.passwordSet ? 'Change' : 'Set'}
+        </button>
+      </div>
+      {note && <p className="muted small">{note}</p>}
+    </section>
   );
 }

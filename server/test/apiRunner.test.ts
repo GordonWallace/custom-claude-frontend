@@ -5,7 +5,7 @@ describe('ApiRunner.health', () => {
   it('fails without ANTHROPIC_API_KEY', async () => {
     const h = await new ApiRunner({}).health();
     expect(h.ok).toBe(false);
-    expect(h.reason).toMatch(/ANTHROPIC_API_KEY is not set/);
+    expect(h.reason).toMatch(/No API key/);
     expect(h.version).toMatch(/^\d+\.\d+\.\d+/);
   });
 

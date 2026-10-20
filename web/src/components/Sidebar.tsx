@@ -46,7 +46,7 @@ export function Sidebar({ projects, project, threads, selectedThreadId, onSelect
                 type="button"
                 className={`thread-item${p.id === project?.id ? ' selected' : ''}`}
                 onClick={() => onSelectProject(p.id)}
-                title={p.workspacePath}
+                title={p.repoUrl ?? p.workspacePath}
               >
                 <span className="thread-title">{p.name}</span>
               </button>
@@ -54,8 +54,8 @@ export function Sidebar({ projects, project, threads, selectedThreadId, onSelect
           ))}
         </ul>
         {project && (
-          <p className="muted small path" title="Workspace (the sessions' working directory)">
-            {project.workspacePath}
+          <p className="muted small path" title={project.repoUrl ? 'Threads clone this repo on their node, each on its own branch' : "Workspace (the sessions' working directory)"}>
+            {project.repoUrl ?? project.workspacePath}
           </p>
         )}
       </div>
@@ -90,26 +90,39 @@ export function Sidebar({ projects, project, threads, selectedThreadId, onSelect
 }
 
 function NewProject({ onCreated }: { onCreated: (p: Project) => void }) {
+  const [kind, setKind] = useState<'repo' | 'folder'>('repo');
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
+  const [repoUrl, setRepoUrl] = useState('');
+  const [baseBranch, setBaseBranch] = useState('');
   const [error, setError] = useState<string>();
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      onCreated(await createProject(name, path));
+      onCreated(await createProject(kind === 'repo' ? { name, repoUrl, baseBranch: baseBranch || undefined } : { name, workspacePath: path }));
     } catch (err) {
       setError((err as Error).message);
     }
   };
   return (
     <form className="new-project" onSubmit={submit}>
+      <div className="seg" role="group" aria-label="Project kind">
+        <button type="button" aria-pressed={kind === 'repo'} onClick={() => setKind('repo')} title="Threads clone the repo on any node, each on its own branch">
+          Git repo
+        </button>
+        <button type="button" aria-pressed={kind === 'folder'} onClick={() => setKind('folder')} title="Threads work in one folder on this machine">
+          Folder here
+        </button>
+      </div>
       <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} aria-label="Project name" />
-      <input
-        placeholder="/absolute/path/to/workspace"
-        value={path}
-        onChange={(e) => setPath(e.target.value)}
-        aria-label="Workspace path"
-      />
+      {kind === 'repo' ? (
+        <>
+          <input placeholder="https://github.com/you/repo.git" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} aria-label="Repo URL" />
+          <input placeholder="Base branch (default branch if empty)" value={baseBranch} onChange={(e) => setBaseBranch(e.target.value)} aria-label="Base branch" />
+        </>
+      ) : (
+        <input placeholder="/absolute/path/to/workspace" value={path} onChange={(e) => setPath(e.target.value)} aria-label="Workspace path" />
+      )}
       <button type="submit">Create</button>
       {error && <p className="error small">{error}</p>}
     </form>

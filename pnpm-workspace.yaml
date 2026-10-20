@@ -2,6 +2,7 @@ packages:
   - shared
   - server
   - web
+  - node
 
 onlyBuiltDependencies:
   - esbuild

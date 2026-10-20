@@ -1,5 +1,14 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { RunnerHealth, RunnerMode } from '@ccf/shared';
+import { NodeAgent } from '../src/nodes/agent.js';
+import { NodeHub } from '../src/nodes/hub.js';
+import type { NodeInfoReport } from '../src/nodes/protocol.js';
+import { TranscriptStore } from '../src/nodes/transcripts.js';
+import { SecretStore } from '../src/secrets.js';
 import { buildApp } from '../src/app.js';
+import { Access, type AccessOptions } from '../src/auth.js';
 import { ApprovalStore } from '../src/approvals.js';
 import { openDb, Settings } from '../src/db.js';
 import { EventBus } from '../src/events.js';
@@ -60,7 +69,7 @@ export class FakeRunner implements SessionRunner {
   }
 }
 
-export async function setup(opts: { mode?: RunnerMode | null; env?: NodeJS.ProcessEnv } = {}) {
+export async function setup(opts: { mode?: RunnerMode | null; env?: NodeJS.ProcessEnv; access?: AccessOptions } = {}) {
   const runners = { api: new FakeRunner('api'), subscription: new FakeRunner('subscription') };
   const db = openDb(':memory:');
   const settings = new Settings(db);
@@ -77,14 +86,35 @@ export async function setup(opts: { mode?: RunnerMode | null; env?: NodeJS.Proce
     log,
     () => store.apiSpendUsd(),
   );
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccf-test-'));
+  const secrets = new SecretStore(store, null);
+  const nodes = new NodeHub(store, new TranscriptStore(path.join(dir, 'transcripts')), log);
   const threads = new ThreadService(store, runtime, new ApprovalStore(bus), bus, {
-    workspacesDir: '/tmp/ccf-test-workspaces',
-    serverUrl: () => 'http://127.0.0.1:1',
+    workspacesDir: path.join(dir, 'workspaces'),
     log,
+    nodes,
+    secrets,
+    env: opts.env ?? {},
   });
-  const app = await buildApp({ runtime, threads, bus });
-  return { app, runtime, threads, runners, settings, store, bus, logs };
+  nodes.attachLocal(
+    new NodeAgent({ workDir: path.join(dir, 'node-work'), baseUrl: () => 'http://127.0.0.1:1', runners, env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(dir, 'claude-local'), ...opts.env } }),
+    LOCAL_INFO,
+    'this machine',
+    3,
+  );
+  const access = opts.access && new Access(store, settings, opts.access);
+  const app = await buildApp({ runtime, threads, bus, nodes, secrets, access });
+  return { app, runtime, threads, runners, settings, store, bus, logs, nodes, secrets, access, dir };
 }
+
+export const LOCAL_INFO: NodeInfoReport = {
+  hostname: 'test',
+  platform: 'linux',
+  arch: 'x64',
+  nodeVersion: '22',
+  claudeVersion: '2.1.0',
+  claudeLoggedIn: true,
+};
 
 /** Resolves when `check` passes, polling the event loop (runs are consumed asynchronously). */
 export async function until(check: () => boolean, timeoutMs = 2000): Promise<void> {
