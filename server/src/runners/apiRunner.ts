@@ -11,12 +11,20 @@ export class ApiRunner extends SdkRunner {
   constructor(
     private readonly env: NodeJS.ProcessEnv = process.env,
     queryFn?: QueryFn,
+    /** A key stored in the app (M5), used when the environment has none. */
+    private readonly storedKey: () => string | undefined = () => undefined,
   ) {
     super(queryFn);
   }
 
+  private key(): { value?: string; source: string } {
+    const env = this.env.ANTHROPIC_API_KEY?.trim();
+    if (env) return { value: env, source: 'ANTHROPIC_API_KEY (environment)' };
+    return { value: this.storedKey()?.trim() || undefined, source: 'API key stored in the app' };
+  }
+
   protected launchProfile(): LaunchProfile {
-    return { env: { ...this.env } };
+    return { env: { ...this.env, ANTHROPIC_API_KEY: this.key().value } };
   }
 
   async health(): Promise<RunnerHealth> {
@@ -25,16 +33,17 @@ export class ApiRunner extends SdkRunner {
     if (!version) {
       return { mode: this.mode, ok: false, reason: 'The Agent SDK package is not installed. Run pnpm install.', checkedAt };
     }
-    if (!this.env.ANTHROPIC_API_KEY?.trim()) {
+    const key = this.key();
+    if (!key.value) {
       return {
         mode: this.mode,
         ok: false,
         version,
-        reason: 'ANTHROPIC_API_KEY is not set. Set it in the environment the server starts in to use API mode.',
+        reason: 'No API key. Set ANTHROPIC_API_KEY in the environment the server starts in, or save one under Settings › Credentials.',
         checkedAt,
       };
     }
-    return { mode: this.mode, ok: true, version, credentialSource: 'ANTHROPIC_API_KEY (environment)', checkedAt };
+    return { mode: this.mode, ok: true, version, credentialSource: key.source, checkedAt };
   }
 
 }

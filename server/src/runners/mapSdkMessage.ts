@@ -13,7 +13,10 @@ export function mapSdkMessage(msg: SDKMessage, mode: RunnerMode): RunEvent[] {
   switch (msg.type) {
     case 'system':
       if (msg.subtype === 'init') return [{ type: 'init', sessionId: msg.session_id, model: msg.model, mode }];
-      if (msg.subtype === 'compact_boundary') return [{ type: 'compacted' }];
+      if (msg.subtype === 'compact_boundary') {
+        const meta = msg.compact_metadata;
+        return [{ type: 'compacted', trigger: meta?.trigger, preTokens: meta?.pre_tokens, postTokens: meta?.post_tokens }];
+      }
       return [];
 
     case 'assistant': {

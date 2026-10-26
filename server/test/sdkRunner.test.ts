@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { ApiRunner } from '../src/runners/apiRunner.js';
 import { CliRunner } from '../src/runners/cliRunner.js';
-import { type QueryFn, TurnInput } from '../src/runners/sdkRunner.js';
+import { type QueryFn, TurnInput, versionedName } from '../src/runners/sdkRunner.js';
 import type { PermissionRequest, RunConfig } from '../src/runners/types.js';
 
 const result = { type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.01, usage: {} } as unknown as SDKMessage;
@@ -47,6 +47,29 @@ describe('TurnInput', () => {
     input.turnDone();
     expect((await it.next()).done).toBe(true);
   });
+
+  it('stays open while background tasks run, for the turn the CLI starts when they finish', async () => {
+    const input = new TurnInput('first');
+    const it = input[Symbol.asyncIterator]();
+    await it.next();
+    input.setBackground(1);
+    input.turnDone();
+    const pending = it.next();
+    let settled = false;
+    void pending.then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+    expect(input.push('still listening')).toBe(true);
+    expect((await pending).value?.message.content).toBe('still listening');
+
+    // The task finishes and the CLI reports it in a turn of its own; then the stream can end.
+    input.setBackground(0);
+    input.turnDone();
+    const after = it.next();
+    input.cliTurnStarted();
+    input.turnDone();
+    expect((await after).done).toBe(true);
+  });
 });
 
 describe('SdkRunner launch profiles', () => {
@@ -66,6 +89,17 @@ describe('SdkRunner launch profiles', () => {
     expect(seen.options?.pathToClaudeCodeExecutable).toBeUndefined();
     expect(seen.options?.env).toMatchObject({ ANTHROPIC_API_KEY: 'sk', CLAUDE_CODE_ENTRYPOINT: 'cli' });
     expect(seen.options?.resume).toBe('sess-1');
+  });
+
+  it('maps thinking to an effort level, or turns thinking off', async () => {
+    const { fn, seen } = fakeQuery();
+    const runner = new CliRunner('/c', {}, fn);
+    await drain(runner.start(cfg({ model: 'opus', thinking: 'xhigh' }), 'hi').events);
+    expect(seen.options).toMatchObject({ model: 'opus', effort: 'xhigh' });
+    expect(seen.options?.thinking).toBeUndefined();
+    await drain(runner.start(cfg({ thinking: 'off' }), 'hi').events);
+    expect(seen.options).toMatchObject({ thinking: { type: 'disabled' } });
+    expect(seen.options?.effort).toBeUndefined();
   });
 
   it('runs a follow-up sent mid-run as the next turn of the same run', async () => {
@@ -101,5 +135,13 @@ describe('SdkRunner launch profiles', () => {
     });
     expect(await canUseTool('Bash', {}, { signal, toolUseID: 't2', requestId: 'r2' })).toEqual({ behavior: 'deny', message: 'no' });
     expect(requests.map((r) => r.toolUseId)).toEqual(['t1', 't2']);
+  });
+});
+
+describe('model names', () => {
+  it('takes the version from the description when the CLI puts it there', () => {
+    expect(versionedName('Opus', 'Opus 5.5 · Best for everyday, complex tasks')).toEqual({ label: 'Opus 5.5', description: 'Best for everyday, complex tasks' });
+    expect(versionedName('Sonnet (1M context)', 'Sonnet 5.5 · Long sessions')).toEqual({ label: 'Sonnet 5.5 (1M context)', description: 'Long sessions' });
+    expect(versionedName('Custom', 'Something else entirely')).toEqual({ label: 'Custom', description: 'Something else entirely' });
   });
 });

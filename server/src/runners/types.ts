@@ -1,4 +1,4 @@
-import type { RunnerHealth, RunnerMode, UsageWindow } from '@ccf/shared';
+import type { ModelOption, RunnerHealth, RunnerMode, ThinkingLevel, UsageWindow } from '@ccf/shared';
 
 export type { RunnerHealth, RunnerMode };
 
@@ -27,6 +27,8 @@ export type PermissionDecision =
 export interface RunConfig {
   cwd: string; // project workspace directory
   model?: string;
+  /** Off turns extended thinking off; a level sets the effort. Undefined leaves both to Claude Code. */
+  thinking?: ThinkingLevel;
   appendSystemPrompt?: string; // role prompt + project memory
   mcpServers: McpServerConfig[]; // always includes the app's own MCP server (from M2)
   allowedTools?: string[];
@@ -37,6 +39,8 @@ export interface RunConfig {
   onPermission: (request: PermissionRequest) => Promise<PermissionDecision>;
   /** URL a SessionStart hook POSTs its JSON to, so the app learns the real session id on start, resume and compaction. */
   sessionHookUrl?: string;
+  /** Extra environment for this run only, such as credentials a node gets from the orchestrator. */
+  env?: Record<string, string>;
 }
 
 export type RunEvent =
@@ -45,7 +49,9 @@ export type RunEvent =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; id: string; isError: boolean; summary: string }
   | { type: 'usage'; inputTokens: number; outputTokens: number; contextTokens?: number }
-  | { type: 'compacted' }
+  | { type: 'compacted'; trigger?: 'manual' | 'auto'; preTokens?: number; postTokens?: number }
+  /** Context window use after a turn, from Claude Code's own accounting (the data behind /context). */
+  | { type: 'context'; usedTokens: number; maxTokens: number; autoCompactAt?: number }
   | {
       type: 'result';
       ok: boolean;
@@ -56,6 +62,8 @@ export type RunEvent =
       inputTokens?: number;
       outputTokens?: number;
     }
+  /** The models this Claude Code offers, asked for once per run. */
+  | { type: 'models'; models: ModelOption[] }
   | { type: 'plan_usage'; status?: string; fiveHour?: UsageWindow; sevenDay?: UsageWindow }
   | { type: 'error'; message: string };
 

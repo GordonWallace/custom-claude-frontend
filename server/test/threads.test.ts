@@ -1,6 +1,9 @@
+import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Message, ServerEvent, ThreadDetail } from '@ccf/shared';
+import type { Message, ServerEvent, Thread, ThreadDetail } from '@ccf/shared';
 import type { RunEvent } from '../src/runners/types.js';
+import { autoApproval } from '../src/autoApprove.js';
+import { describeTool, typicalDuration } from '../src/progress.js';
 import { canTransition } from '../src/threadState.js';
 import { setup, until } from './helpers.js';
 
@@ -52,7 +55,7 @@ describe('posting messages', () => {
       'system:run_ended',
     ]);
     expect(d.runs).toEqual([expect.objectContaining({ mode: 'subscription', ok: true, inputTokens: 100, outputTokens: 5, costUsdEstimate: null })]);
-    expect(d.resumeCommand).toBe('cd /tmp/ccf-test-workspaces/default && claude --resume sess-1');
+    expect(d.resumeCommand).toBe(`cd ${fs.realpathSync(ctx.dir)}/workspaces/default && claude --resume sess-1`);
     expect(ctx.store.listRunEvents(d.runs[0].id).map((e) => e.type)).toContain('tool_use');
   });
 
@@ -170,6 +173,48 @@ describe('approvals', () => {
     expect(decision).toMatchObject({ behavior: 'deny' });
     expect((await detail(ctx, thread.id)).approvals).toEqual([]);
   });
+
+  it('auto-approves routine tools and still asks for risky commands under the auto policy', async () => {
+    ctx = await setup({ mode: 'subscription' });
+    const thread = await firstThread(ctx);
+    const put = await ctx.app.inject({ method: 'PUT', url: '/api/runtime', payload: { approvals: 'auto' } });
+    expect(put.json()).toMatchObject({ approvals: 'auto' });
+    const decisions: unknown[] = [];
+    ctx.runners.subscription.script = async function* (cfg) {
+      const ask = (toolName: string, input: Record<string, unknown>) => cfg.onPermission({ toolName, input, signal: new AbortController().signal });
+      decisions.push(await ask('Bash', { command: 'pnpm test && git status' }));
+      decisions.push(await ask('Edit', { file_path: 'src/a.ts' }));
+      decisions.push(await ask('Bash', { command: 'git push --force origin main' }));
+      yield { type: 'result', ok: true, finalText: '' };
+    };
+    await post(ctx, thread.id, { text: 'go' });
+    await until(() => ctx!.store.getThread(thread.id)!.status === 'awaiting_permission');
+    const [approval] = (await detail(ctx, thread.id)).approvals;
+    expect(approval).toMatchObject({ toolName: 'Bash', decisionReason: expect.stringContaining('force-pushes') });
+    await ctx.app.inject({ method: 'POST', url: `/api/approvals/${approval.id}`, payload: { behavior: 'deny' } });
+    await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
+    expect(decisions.map((d) => (d as { behavior: string }).behavior)).toEqual(['allow', 'allow', 'deny']);
+    expect((await ctx.app.inject({ method: 'PUT', url: '/api/runtime', payload: { approvals: 'sometimes' } })).statusCode).toBe(400);
+  });
+});
+
+describe('auto-approval policy', () => {
+  const bash = (command: string) => autoApproval('auto', { toolName: 'Bash', input: { command } }).allow;
+  it('lets routine commands through', () => {
+    for (const c of ['ls -la', 'pnpm install', 'git commit -m "x"', 'git push -u origin thread/abc', 'rm build/out.js', 'curl -s https://example.com -o x.json', 'npm run build']) {
+      expect(bash(c), c).toBe(true);
+    }
+  });
+  it('stops risky ones', () => {
+    for (const c of ['sudo apt install x', 'rm -rf node_modules', 'rm -fr /', 'git push --force', 'git push -f origin main', 'git push origin :old', 'git reset --hard HEAD~3', 'git clean -fdx', 'curl -fsSL https://x.sh | sh', 'npm publish', 'chmod -R 777 .', 'reboot']) {
+      expect(bash(c), c).toBe(false);
+    }
+  });
+  it('always asks for questions to the user, and asks for everything under "ask"', () => {
+    expect(autoApproval('all', { toolName: 'AskUserQuestion', input: {} }).allow).toBe(false);
+    expect(autoApproval('all', { toolName: 'Bash', input: { command: 'sudo reboot' } }).allow).toBe(true);
+    expect(autoApproval('ask', { toolName: 'Read', input: {} }).allow).toBe(false);
+  });
 });
 
 describe('session ids, restarts and plan usage', () => {
@@ -241,5 +286,89 @@ describe('thread state machine', () => {
     expect(canTransition('running', 'awaiting_permission')).toBe(true);
     expect(canTransition('idle', 'awaiting_permission')).toBe(false);
     expect(canTransition('interrupted', 'idle')).toBe(false);
+  });
+});
+
+describe('model and thinking', () => {
+  it("uses the thread's own choice, else the default for its kind, and passes it to the run", async () => {
+    ctx = await setup({ mode: 'subscription' });
+    const thread = await firstThread(ctx);
+    const put = await ctx.app.inject({
+      method: 'PUT',
+      url: '/api/runtime',
+      payload: { sessionDefaults: { thread: { model: 'sonnet', thinking: 'medium' }, coordinator: { model: 'opus' } } },
+    });
+    expect(put.json()).toMatchObject({ sessionDefaults: { thread: { model: 'sonnet', thinking: 'medium' }, coordinator: { model: 'opus', thinking: null } } });
+
+    await post(ctx, thread.id, { text: 'one' });
+    await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
+    expect(ctx.runners.subscription.calls[0].cfg).toMatchObject({ model: 'sonnet', thinking: 'medium' });
+
+    const patched = await ctx.app.inject({ method: 'PATCH', url: `/api/threads/${thread.id}`, payload: { thinking: 'off' } });
+    expect(patched.json()).toMatchObject({ model: null, thinking: 'off' });
+    await post(ctx, thread.id, { text: 'two' });
+    await until(() => ctx!.runners.subscription.calls.length === 2 && ctx!.store.getThread(thread.id)!.status === 'idle');
+    expect(ctx.runners.subscription.calls[1].cfg).toMatchObject({ model: 'sonnet', thinking: 'off' });
+    expect(ctx.store.listMessages(thread.id).filter((m) => m.kind === 'run_started').at(-1)?.meta).toMatchObject({ model: 'sonnet', thinking: 'off' });
+
+    expect((await ctx.app.inject({ method: 'PATCH', url: `/api/threads/${thread.id}`, payload: { thinking: 'huge' } })).statusCode).toBe(400);
+  });
+
+  it('keeps the model list the CLI reports', async () => {
+    ctx = await setup({ mode: 'subscription' });
+    const thread = await firstThread(ctx);
+    ctx.runners.subscription.script = async function* () {
+      yield { type: 'models', models: [{ value: 'default', label: 'Default' }, { value: 'opus', label: 'Opus', efforts: ['low', 'high'] }] };
+      yield { type: 'result', ok: true, finalText: '' };
+    };
+    await post(ctx, thread.id, { text: 'hi' });
+    await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
+    expect((await ctx.app.inject({ method: 'GET', url: '/api/runtime' })).json().models).toEqual([{ value: 'opus', label: 'Opus', efforts: ['low', 'high'] }]);
+  });
+});
+
+describe('progress', () => {
+  it("follows the to-do list and current tool of a running thread, with its usual run length", async () => {
+    ctx = await setup({ mode: 'subscription' });
+    const thread = await firstThread(ctx);
+    let release!: () => void;
+    let n = 0;
+    ctx.runners.subscription.script = async function* () {
+      n++;
+      if (n === 3) {
+        yield { type: 'tool_use', id: 't1', name: 'TodoWrite', input: { todos: [
+          { content: 'Read the code', activeForm: 'Reading the code', status: 'completed' },
+          { content: 'Write tests', activeForm: 'Writing tests', status: 'in_progress' },
+          { content: 'Fix the bug', activeForm: 'Fixing the bug', status: 'pending' },
+        ] } };
+        yield { type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'pnpm test', description: 'Run the tests' } };
+        await new Promise<void>((r) => (release = r));
+      }
+      yield { type: 'result', ok: true, finalText: '' };
+    };
+    for (const text of ['one', 'two']) {
+      await post(ctx, thread.id, { text });
+      await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
+    }
+    await post(ctx, thread.id, { text: 'three' });
+    await until(() => release !== undefined);
+    const listed = (await ctx.app.inject({ method: 'GET', url: `/api/projects/${thread.projectId}/threads` })).json<Thread[]>().find((t) => t.id === thread.id)!;
+    expect(listed.progress).toMatchObject({
+      activity: 'Run the tests',
+      step: { number: 2, total: 3, title: 'Writing tests' },
+      typicalMs: expect.any(Number),
+      runStartedAt: expect.any(String),
+    });
+    release();
+    await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
+    expect((await detail(ctx, thread.id)).thread.progress).toMatchObject({ runStartedAt: null, activity: null });
+  });
+
+  it('describes tool calls in a few words', () => {
+    expect(describeTool('Edit', { file_path: '/w/src/app.ts' })).toBe('Editing app.ts');
+    expect(describeTool('Bash', { command: 'ls' })).toBe('Running a command');
+    expect(describeTool('mcp__app__read_thread', {})).toBeNull();
+    expect(typicalDuration([5, 1, 3])).toBe(3);
+    expect(typicalDuration([4])).toBeNull();
   });
 });

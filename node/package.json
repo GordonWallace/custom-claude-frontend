@@ -1,0 +1,17 @@
+{
+  "name": "@ccf/node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The node worker: runs threads for the orchestrator on another machine.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@ccf/shared": "workspace:*",
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { Message, MessageKind, Project, Run, RunnerMode, Thread, ThreadStatus } from '@ccf/shared';
+import type { Message, MessageKind, NodeState, Project, Run, RunnerMode, Thread, ThreadStatus, UsageWindow } from '@ccf/shared';
 import type { Db } from './db.js';
+import type { PlanReading, RunWeight } from './planUsage.js';
 
 interface ThreadRow {
   id: string;
@@ -12,6 +13,14 @@ interface ThreadRow {
   claude_session_id: string | null;
   last_mode: RunnerMode | null;
   context_tokens: number | null;
+  context_window: number | null;
+  auto_compact_at: number | null;
+  node_id: string | null;
+  worktree_path: string | null;
+  handoff_from: string | null;
+  handoff_note: string | null;
+  model: string | null;
+  thinking: Thread['thinking'];
   created_at: string;
   updated_at: string;
 }
@@ -51,6 +60,12 @@ const toThread = (r: ThreadRow): Thread => ({
   claudeSessionId: r.claude_session_id,
   lastMode: r.last_mode,
   contextTokens: r.context_tokens,
+  contextWindow: r.context_window,
+  autoCompactAt: r.auto_compact_at,
+  nodeId: r.node_id,
+  worktreePath: r.worktree_path,
+  model: r.model,
+  thinking: r.thinking,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -83,11 +98,16 @@ export class Store {
   constructor(private readonly db: Db) {}
 
   /** Inserts the project and the coordinator thread that backs its project chat. */
-  createProject(name: string, workspacePath: string, coordinatorTitle: string): Project {
+  createProject(
+    name: string,
+    workspacePath: string,
+    coordinatorTitle: string,
+    repo: { repoUrl: string | null; baseBranch: string | null } = { repoUrl: null, baseBranch: null },
+  ): Project {
     const id = randomUUID();
     this.db
-      .prepare('INSERT INTO projects (id, name, workspace_path, created_at) VALUES (?, ?, ?, ?)')
-      .run(id, name, workspacePath, now());
+      .prepare('INSERT INTO projects (id, name, workspace_path, repo_url, base_branch, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, name, workspacePath, repo.repoUrl, repo.baseBranch, now());
     this.createThread(id, 'coordinator', coordinatorTitle);
     return this.getProject(id)!;
   }
@@ -103,6 +123,8 @@ export class Store {
         id: string;
         name: string;
         workspace_path: string;
+        repo_url: string | null;
+        base_branch: string | null;
         coordinator_thread_id: string | null;
         created_at: string;
       }[]
@@ -110,6 +132,8 @@ export class Store {
       id: r.id,
       name: r.name,
       workspacePath: r.workspace_path,
+      repoUrl: r.repo_url,
+      baseBranch: r.base_branch,
       coordinatorThreadId: r.coordinator_thread_id ?? '',
       createdAt: r.created_at,
     }));
@@ -162,21 +186,49 @@ export class Store {
 
   updateThread(
     id: string,
-    patch: Partial<Pick<Thread, 'status' | 'claudeSessionId' | 'lastMode' | 'contextTokens' | 'title'>>,
+    patch: Partial<
+      Pick<
+        Thread,
+        'status' | 'claudeSessionId' | 'lastMode' | 'contextTokens' | 'contextWindow' | 'autoCompactAt' | 'title' | 'nodeId' | 'worktreePath' | 'model' | 'thinking'
+      > & { handoffFrom: string | null; handoffNote: string | null }
+    >,
   ): Thread {
     const columns: Record<string, string> = {
       status: 'status',
       claudeSessionId: 'claude_session_id',
       lastMode: 'last_mode',
       contextTokens: 'context_tokens',
+      contextWindow: 'context_window',
+      autoCompactAt: 'auto_compact_at',
       title: 'title',
+      nodeId: 'node_id',
+      worktreePath: 'worktree_path',
+      handoffFrom: 'handoff_from',
+      handoffNote: 'handoff_note',
+      model: 'model',
+      thinking: 'thinking',
     };
+    // undefined leaves a column alone; null clears it.
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     const sets = entries.map(([k]) => `${columns[k]} = ?`);
     this.db
       .prepare(`UPDATE threads SET ${[...sets, 'updated_at = ?'].join(', ')} WHERE id = ?`)
       .run(...(entries.map(([, v]) => v) as (string | number | null)[]), now(), id);
     return this.getThread(id)!;
+  }
+
+  /** Where a thread was handed off from, and what its next run should be told, until a run starts elsewhere. */
+  handoffOf(threadId: string): { from: string | null; note: string | null } {
+    const row = this.db.prepare('SELECT handoff_from, handoff_note FROM threads WHERE id = ?').get(threadId) as
+      | { handoff_from: string | null; handoff_note: string | null }
+      | undefined;
+    return { from: row?.handoff_from ?? null, note: row?.handoff_note ?? null };
+  }
+
+  threadsOnNode(nodeId: string): Thread[] {
+    return (this.db.prepare('SELECT * FROM threads WHERE node_id = ? ORDER BY created_at').all(nodeId) as unknown as ThreadRow[]).map(
+      toThread,
+    );
   }
 
   addMessage(m: Omit<Message, 'id' | 'createdAt'>): Message {
@@ -211,12 +263,24 @@ export class Store {
     return (this.db.prepare('SELECT * FROM runs WHERE thread_id = ? ORDER BY id').all(threadId) as unknown as RunRow[]).map(toRun);
   }
 
-  endRun(id: number, result: { ok: boolean; inputTokens: number; outputTokens: number; costUsdEstimate?: number }): Run {
+  endRun(
+    id: number,
+    result: { ok: boolean; inputTokens: number; outputTokens: number; costUsdEstimate?: number; notionalCostUsd?: number },
+  ): Run {
     this.db
       .prepare(
-        'UPDATE runs SET ended_at = ?, ok = ?, input_tokens = ?, output_tokens = ?, cost_usd_estimate = ? WHERE id = ?',
+        `UPDATE runs SET ended_at = ?, ok = ?, input_tokens = ?, output_tokens = ?, cost_usd_estimate = ?, notional_cost_usd = ?
+         WHERE id = ?`,
       )
-      .run(now(), result.ok ? 1 : 0, result.inputTokens, result.outputTokens, result.costUsdEstimate ?? null, id);
+      .run(
+        now(),
+        result.ok ? 1 : 0,
+        result.inputTokens,
+        result.outputTokens,
+        result.costUsdEstimate ?? null,
+        result.notionalCostUsd ?? null,
+        id,
+      );
     return this.getRun(id)!;
   }
 
@@ -243,6 +307,19 @@ export class Store {
 
   enqueueInput(threadId: string, text: string): void {
     this.db.prepare('INSERT INTO queued_inputs (thread_id, text, created_at) VALUES (?, ?, ?)').run(threadId, text, now());
+  }
+
+  addCoordinatorContext(projectId: string, text: string): void {
+    this.db.prepare('INSERT INTO coordinator_context (project_id, text, created_at) VALUES (?, ?, ?)').run(projectId, text, now());
+  }
+
+  /** Removes and returns a project's saved coordinator context, keeping only the newest entries. */
+  takeCoordinatorContext(projectId: string, limit: number): string[] {
+    const rows = this.db
+      .prepare('SELECT text FROM coordinator_context WHERE project_id = ? ORDER BY id DESC LIMIT ?')
+      .all(projectId, limit) as { text: string }[];
+    this.db.prepare('DELETE FROM coordinator_context WHERE project_id = ?').run(projectId);
+    return rows.map((r) => r.text).reverse();
   }
 
   /** Removes and returns a thread's queued inputs, oldest first. */
@@ -275,10 +352,171 @@ export class Store {
     ).map((r) => r.thread_id);
   }
 
+  addPlanReading(runId: number | null, usage: { fiveHour?: UsageWindow; sevenDay?: UsageWindow }, observedAt = now()): void {
+    this.db
+      .prepare(
+        `INSERT INTO plan_readings (observed_at, run_id, five_hour, five_hour_resets, seven_day, seven_day_resets)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        observedAt,
+        runId,
+        usage.fiveHour?.utilization ?? null,
+        usage.fiveHour?.resetsAt ?? null,
+        usage.sevenDay?.utilization ?? null,
+        usage.sevenDay?.resetsAt ?? null,
+      );
+  }
+
+  planReadingsSince(since: string): PlanReading[] {
+    return (
+      this.db.prepare('SELECT * FROM plan_readings WHERE observed_at >= ? ORDER BY observed_at, id').all(since) as {
+        observed_at: string;
+        five_hour: number | null;
+        five_hour_resets: string | null;
+        seven_day: number | null;
+        seven_day_resets: string | null;
+      }[]
+    ).map((r) => ({
+      at: r.observed_at,
+      fiveHour: r.five_hour === null ? undefined : { utilization: r.five_hour, resetsAt: r.five_hour_resets ?? undefined },
+      sevenDay: r.seven_day === null ? undefined : { utilization: r.seven_day, resetsAt: r.seven_day_resets ?? undefined },
+    }));
+  }
+
+  /** Lengths of the newest finished runs of one thread, or of every thread in a project, in milliseconds. */
+  runDurations(scope: { threadId: string } | { projectId: string }, limit = 20): number[] {
+    const rows = (
+      'threadId' in scope
+        ? this.db
+            .prepare('SELECT started_at, ended_at FROM runs WHERE thread_id = ? AND ended_at IS NOT NULL ORDER BY id DESC LIMIT ?')
+            .all(scope.threadId, limit)
+        : this.db
+            .prepare(
+              `SELECT r.started_at, r.ended_at FROM runs r JOIN threads t ON t.id = r.thread_id
+               WHERE t.project_id = ? AND t.kind = 'thread' AND r.ended_at IS NOT NULL ORDER BY r.id DESC LIMIT ?`,
+            )
+            .all(scope.projectId, limit)
+    ) as { started_at: string; ended_at: string }[];
+    return rows.map((r) => Date.parse(r.ended_at) - Date.parse(r.started_at)).filter((ms) => ms >= 0);
+  }
+
+  /** Finished Subscription runs since a time, with what they'd have cost at API prices. */
+  subscriptionRunsSince(since: string): RunWeight[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT r.id, r.thread_id, t.project_id, r.ended_at, r.notional_cost_usd FROM runs r JOIN threads t ON t.id = r.thread_id
+           WHERE r.mode = 'subscription' AND r.ended_at >= ? AND r.notional_cost_usd IS NOT NULL ORDER BY r.ended_at`,
+        )
+        .all(since) as { id: number; thread_id: string; project_id: string; ended_at: string; notional_cost_usd: number }[]
+    ).map((r) => ({ runId: r.id, threadId: r.thread_id, projectId: r.project_id, endedAt: r.ended_at, usd: r.notional_cost_usd }));
+  }
+
   apiSpendUsd(): number {
     const row = this.db
       .prepare("SELECT COALESCE(SUM(cost_usd_estimate), 0) AS total FROM runs WHERE mode = 'api'")
       .get() as { total: number };
     return row.total;
   }
+
+  // ---- Nodes (M5) ----
+
+  listNodes(): NodeRow[] {
+    return this.db.prepare('SELECT * FROM nodes ORDER BY is_local DESC, created_at').all() as unknown as NodeRow[];
+  }
+
+  getNode(id: string): NodeRow | undefined {
+    return this.db.prepare('SELECT * FROM nodes WHERE id = ?').get(id) as unknown as NodeRow | undefined;
+  }
+
+  nodeByTokenHash(hash: string): NodeRow | undefined {
+    return this.db.prepare('SELECT * FROM nodes WHERE token_hash = ?').get(hash) as unknown as NodeRow | undefined;
+  }
+
+  createNode(n: { name: string; local: boolean; tokenHash: string | null; threadLimit: number }): NodeRow {
+    const id = randomUUID();
+    this.db
+      .prepare('INSERT INTO nodes (id, name, is_local, token_hash, thread_limit, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, n.name, n.local ? 1 : 0, n.tokenHash, n.threadLimit, now());
+    return this.getNode(id)!;
+  }
+
+  updateNode(
+    id: string,
+    patch: Partial<{ name: string; state: string; thread_limit: number; last_seen_at: string; resources_json: string; info_json: string }>,
+  ): void {
+    const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) return;
+    this.db
+      .prepare(`UPDATE nodes SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`)
+      .run(...(entries.map(([, v]) => v) as (string | number)[]), id);
+  }
+
+  deleteNode(id: string): void {
+    this.db.prepare('UPDATE threads SET node_id = NULL WHERE node_id = ?').run(id);
+    this.db.prepare('DELETE FROM nodes WHERE id = ?').run(id);
+  }
+
+  // ---- Secrets (M5): ciphertext only; see secrets.ts ----
+
+  getSecretRow(name: string): SecretRow | undefined {
+    return this.db.prepare('SELECT * FROM secrets WHERE name = ?').get(name) as unknown as SecretRow | undefined;
+  }
+
+  listSecretRows(): SecretRow[] {
+    return this.db.prepare('SELECT * FROM secrets').all() as unknown as SecretRow[];
+  }
+
+  putSecretRow(row: Omit<SecretRow, 'updated_at'>): void {
+    this.db
+      .prepare(
+        `INSERT INTO secrets (name, iv, tag, ciphertext, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET iv = excluded.iv, tag = excluded.tag, ciphertext = excluded.ciphertext, updated_at = excluded.updated_at`,
+      )
+      .run(row.name, row.iv, row.tag, row.ciphertext, now());
+  }
+
+  deleteSecretRow(name: string): void {
+    this.db.prepare('DELETE FROM secrets WHERE name = ?').run(name);
+  }
+
+  // ---- Login sessions for remote access (M5) ----
+
+  addAuthSession(tokenHash: string, expiresAt: string): void {
+    this.db.prepare('INSERT INTO auth_sessions (token_hash, created_at, expires_at) VALUES (?, ?, ?)').run(tokenHash, now(), expiresAt);
+  }
+
+  authSessionValid(tokenHash: string): boolean {
+    return this.db.prepare('SELECT 1 FROM auth_sessions WHERE token_hash = ? AND expires_at > ?').get(tokenHash, now()) !== undefined;
+  }
+
+  deleteAuthSession(tokenHash: string): void {
+    this.db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').run(tokenHash);
+  }
+
+  deleteAllAuthSessions(): void {
+    this.db.prepare('DELETE FROM auth_sessions').run();
+  }
+}
+
+export interface NodeRow {
+  id: string;
+  name: string;
+  is_local: number;
+  token_hash: string | null;
+  state: NodeState;
+  thread_limit: number;
+  last_seen_at: string | null;
+  resources_json: string | null;
+  info_json: string | null;
+  created_at: string;
+}
+
+export interface SecretRow {
+  name: string;
+  iv: string;
+  tag: string;
+  ciphertext: string;
+  updated_at: string;
 }
