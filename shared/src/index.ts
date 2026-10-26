@@ -136,8 +136,21 @@ export interface Thread {
   /** This thread's own model and thinking level; null uses the default for its kind. */
   model: string | null;
   thinking: ThinkingLevel | null;
+  /** What the thread is doing now, from its to-do list and tool calls; live only, absent when idle with no list. */
+  progress?: ThreadProgress;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ThreadProgress {
+  /** When the current run started; null between runs. */
+  runStartedAt: string | null;
+  /** The tool it is running, in a few words ("Running tests"). */
+  activity: string | null;
+  /** Its place in Claude Code's own to-do list, when it keeps one. */
+  step: { number: number; total: number; title: string | null } | null;
+  /** The middle length of this thread's past runs (or the project's), when there are enough to say. */
+  typicalMs: number | null;
 }
 
 export type MessageKind =

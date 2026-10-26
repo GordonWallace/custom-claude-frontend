@@ -9,6 +9,7 @@ import { PlanShareLabel } from './PlanShareLabel';
 import { useConnection, useServerEvents } from '../live';
 import { usePrefs } from '../prefs';
 import { ApprovalCard, ToolInput } from './ApprovalCard';
+import { ProgressLine } from './ProgressLine';
 import { StatusPill } from './StatusPill';
 
 interface Props {
@@ -312,7 +313,10 @@ function ThreadNotice({ message, onOpenThread }: { message: Message; onOpenThrea
 function ThreadCard({ title, thread, open, onOpen }: { title: string; thread?: Thread; open: boolean; onOpen?: () => void }) {
   return (
     <button type="button" className={`thread-card${open ? ' open' : ''}`} onClick={onOpen} data-testid="thread-card">
-      <span className="thread-card-title">{title}</span>
+      <span className="thread-card-main">
+        <span className="thread-card-title">{title}</span>
+        {thread && <ProgressLine thread={thread} />}
+      </span>
       <span className="thread-card-meta">
         {thread?.lastMode && <span className={`mode-tag mode-tag-${thread.lastMode}`}>{MODE_LABEL[thread.lastMode].split(':')[0]}</span>}
         {thread && <StatusPill status={thread.status} />}

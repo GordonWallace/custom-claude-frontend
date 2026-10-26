@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Project, Thread } from '@ccf/shared';
 import { createProject, createThread } from '../api';
+import { ProgressLine } from './ProgressLine';
 import { StatusPill } from './StatusPill';
 
 interface Props {
@@ -78,7 +79,10 @@ export function Sidebar({ projects, project, threads, selectedThreadId, onSelect
                 className={`thread-item${t.id === selectedThreadId ? ' selected' : ''}`}
                 onClick={() => onSelectThread(t.id)}
               >
-                <span className="thread-title">{t.title}</span>
+                <span className="thread-item-main">
+                  <span className="thread-title">{t.title}</span>
+                  <ProgressLine thread={t} />
+                </span>
                 <StatusPill status={t.status} />
               </button>
             </li>

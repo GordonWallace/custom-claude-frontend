@@ -921,3 +921,8 @@ pre.command {
 .session-pickers select { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); max-width: 100%; }
 .composer-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
 .defaults-row { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; margin-top: 8px; }
+
+/* Progress lines under busy threads */
+.thread-item-main, .thread-card-main { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
+.progress-line { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress-line.needs-you { color: var(--warn); }

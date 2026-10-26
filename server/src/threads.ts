@@ -18,6 +18,7 @@ import type {
 } from '@ccf/shared';
 import type { ApprovalStore } from './approvals.js';
 import { autoApproval } from './autoApprove.js';
+import { ProgressTracker, typicalDuration } from './progress.js';
 import { HttpError } from './errors.js';
 import type { EventBus } from './events.js';
 import { APP_MCP_SERVER, toolsFor } from './mcpTools.js';
@@ -95,6 +96,7 @@ export interface ThreadServiceOptions {
 export class ThreadService {
   private readonly active = new Map<string, ActiveRun>();
   private readonly runTokens = new Map<string, string>();
+  private readonly progress = new ProgressTracker();
   private pumping: Promise<void> = Promise.resolve();
   private nodesQueued = false;
 
@@ -190,14 +192,14 @@ export class ThreadService {
 
   listThreads(projectId: string): Thread[] {
     if (!this.store.getProject(projectId)) throw new HttpError(404, 'No such project.');
-    return this.store.listThreads(projectId);
+    return this.store.listThreads(projectId).map((t) => this.withProgress(t));
   }
 
   detail(threadId: string): ThreadDetail {
     const thread = this.getThread(threadId);
     const project = this.store.getProject(thread.projectId)!;
     return {
-      thread,
+      thread: this.withProgress(thread),
       project,
       messages: this.store.listMessages(threadId),
       runs: this.store.listRuns(threadId),
@@ -556,6 +558,10 @@ export class ThreadService {
     }
 
     const settings = this.sessionSettings(thread);
+    if (thread.kind === 'thread') {
+      const typical = typicalDuration(this.store.runDurations({ threadId: thread.id })) ?? typicalDuration(this.store.runDurations({ projectId: thread.projectId }), 3);
+      this.progress.runStarted(thread.id, typical);
+    }
     this.setStatus(thread.id, 'running', { lastMode: mode });
     this.addMessage({
       threadId: thread.id,
@@ -592,7 +598,8 @@ export class ThreadService {
         message: text,
         resumeSessionId: thread.claudeSessionId,
         workspace,
-        env: this.runEnv(mode, nodeId, workspace),
+        // Headless Claude Code leaves out its task-list tools unless asked; threads use them to show progress.
+        env: { ...this.runEnv(mode, nodeId, workspace), ...(thread.kind === 'thread' && { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }) },
       });
     } catch (err) {
       const message = (err as Error).message;
@@ -646,6 +653,7 @@ export class ThreadService {
             break;
           case 'tool_use':
             add({ author: 'assistant', kind: 'tool_use', text: event.name, meta: { toolUseId: event.id, input: event.input } });
+            if (this.progress.toolUse(threadId, event.name, event.input)) this.publishThread(this.getThread(threadId));
             break;
           case 'tool_result':
             add({ author: 'system', kind: 'tool_result', text: event.summary, meta: { toolUseId: event.id, isError: event.isError } });
@@ -760,6 +768,7 @@ export class ThreadService {
                 : 'Failed',
       meta: { mode: run.mode, ok: result.ok, interrupted, costUsdEstimate: run.costUsdEstimate, ...(moving && { moving }) },
     });
+    this.progress.runEnded(threadId);
     const queued = this.store.hasQueuedInput(threadId);
     const status: ThreadStatus = queued ? 'queued' : interrupted ? 'interrupted' : result.ok ? 'idle' : 'failed';
     this.setStatus(threadId, status);
@@ -1093,7 +1102,12 @@ export class ThreadService {
   }
 
   private publishThread(thread: Thread): void {
-    this.bus.publish({ type: 'thread', thread });
+    this.bus.publish({ type: 'thread', thread: this.withProgress(thread) });
+  }
+
+  private withProgress(thread: Thread): Thread {
+    const progress = this.progress.view(thread.id);
+    return progress ? { ...thread, progress } : thread;
   }
 }
 

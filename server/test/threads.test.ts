@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Message, ServerEvent, ThreadDetail } from '@ccf/shared';
+import type { Message, ServerEvent, Thread, ThreadDetail } from '@ccf/shared';
 import type { RunEvent } from '../src/runners/types.js';
 import { autoApproval } from '../src/autoApprove.js';
+import { describeTool, typicalDuration } from '../src/progress.js';
 import { canTransition } from '../src/threadState.js';
 import { setup, until } from './helpers.js';
 
@@ -323,5 +324,51 @@ describe('model and thinking', () => {
     await post(ctx, thread.id, { text: 'hi' });
     await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
     expect((await ctx.app.inject({ method: 'GET', url: '/api/runtime' })).json().models).toEqual([{ value: 'opus', label: 'Opus', efforts: ['low', 'high'] }]);
+  });
+});
+
+describe('progress', () => {
+  it("follows the to-do list and current tool of a running thread, with its usual run length", async () => {
+    ctx = await setup({ mode: 'subscription' });
+    const thread = await firstThread(ctx);
+    let release!: () => void;
+    let n = 0;
+    ctx.runners.subscription.script = async function* () {
+      n++;
+      if (n === 3) {
+        yield { type: 'tool_use', id: 't1', name: 'TodoWrite', input: { todos: [
+          { content: 'Read the code', activeForm: 'Reading the code', status: 'completed' },
+          { content: 'Write tests', activeForm: 'Writing tests', status: 'in_progress' },
+          { content: 'Fix the bug', activeForm: 'Fixing the bug', status: 'pending' },
+        ] } };
+        yield { type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'pnpm test', description: 'Run the tests' } };
+        await new Promise<void>((r) => (release = r));
+      }
+      yield { type: 'result', ok: true, finalText: '' };
+    };
+    for (const text of ['one', 'two']) {
+      await post(ctx, thread.id, { text });
+      await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
+    }
+    await post(ctx, thread.id, { text: 'three' });
+    await until(() => release !== undefined);
+    const listed = (await ctx.app.inject({ method: 'GET', url: `/api/projects/${thread.projectId}/threads` })).json<Thread[]>().find((t) => t.id === thread.id)!;
+    expect(listed.progress).toMatchObject({
+      activity: 'Run the tests',
+      step: { number: 2, total: 3, title: 'Writing tests' },
+      typicalMs: expect.any(Number),
+      runStartedAt: expect.any(String),
+    });
+    release();
+    await until(() => ctx!.store.getThread(thread.id)!.status === 'idle');
+    expect((await detail(ctx, thread.id)).thread.progress).toMatchObject({ runStartedAt: null, activity: null });
+  });
+
+  it('describes tool calls in a few words', () => {
+    expect(describeTool('Edit', { file_path: '/w/src/app.ts' })).toBe('Editing app.ts');
+    expect(describeTool('Bash', { command: 'ls' })).toBe('Running a command');
+    expect(describeTool('mcp__app__read_thread', {})).toBeNull();
+    expect(typicalDuration([5, 1, 3])).toBe(3);
+    expect(typicalDuration([4])).toBeNull();
   });
 });

@@ -384,6 +384,23 @@ export class Store {
     }));
   }
 
+  /** Lengths of the newest finished runs of one thread, or of every thread in a project, in milliseconds. */
+  runDurations(scope: { threadId: string } | { projectId: string }, limit = 20): number[] {
+    const rows = (
+      'threadId' in scope
+        ? this.db
+            .prepare('SELECT started_at, ended_at FROM runs WHERE thread_id = ? AND ended_at IS NOT NULL ORDER BY id DESC LIMIT ?')
+            .all(scope.threadId, limit)
+        : this.db
+            .prepare(
+              `SELECT r.started_at, r.ended_at FROM runs r JOIN threads t ON t.id = r.thread_id
+               WHERE t.project_id = ? AND t.kind = 'thread' AND r.ended_at IS NOT NULL ORDER BY r.id DESC LIMIT ?`,
+            )
+            .all(scope.projectId, limit)
+    ) as { started_at: string; ended_at: string }[];
+    return rows.map((r) => Date.parse(r.ended_at) - Date.parse(r.started_at)).filter((ms) => ms >= 0);
+  }
+
   /** Finished Subscription runs since a time, with what they'd have cost at API prices. */
   subscriptionRunsSince(since: string): RunWeight[] {
     return (
