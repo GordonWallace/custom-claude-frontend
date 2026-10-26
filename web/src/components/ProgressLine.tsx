@@ -43,9 +43,9 @@ export function ProgressLine({ thread }: { thread: Thread }) {
     p.typicalMs ? "The usual time is the middle of this thread's past runs (or the project's), not a prediction." : null,
   ]
     .filter(Boolean)
-    .join(' ');
+    .join('\n');
   return (
-    <span className="progress-line" title={title || undefined} data-testid="progress-line">
+    <span className="progress-line" title={title} data-testid="progress-line">
       {parts.join(' · ')}
     </span>
   );

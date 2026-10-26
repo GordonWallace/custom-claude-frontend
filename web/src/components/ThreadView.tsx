@@ -102,6 +102,7 @@ export function ThreadView({ threadId, threads, openThreadId, onOpenThread, onCl
         </div>
         <div className="thread-meta muted small">
           {thread.origin === 'coordinator' && <span>Started by the coordinator</span>}
+          {!isChat && <ProgressLine thread={thread} />}
           {thread.lastMode ? <span className={`mode-tag mode-tag-${thread.lastMode}`}>Last ran: {MODE_LABEL[thread.lastMode]}</span> : <span>Not run yet</span>}
           <ContextMeter thread={thread} />
           <PlanShareLabel
